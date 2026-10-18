@@ -97,10 +97,11 @@
 }
 
 .nav-item-btn.active {
-  background: linear-gradient(90deg, rgba(168, 85, 247, 0.18), rgba(99, 102, 241, 0.08));
+  background: linear-gradient(90deg, rgba(168, 85, 247, 0.22), rgba(99, 102, 241, 0.1));
   color: #ffffff;
-  border-color: rgba(168, 85, 247, 0.35);
-  box-shadow: 0 2px 12px rgba(168, 85, 247, 0.12);
+  border-color: rgba(168, 85, 247, 0.45);
+  border-left: 3px solid var(--accent-violet);
+  box-shadow: 0 2px 12px rgba(168, 85, 247, 0.18);
 }
 
 .nav-icon {
@@ -507,6 +508,149 @@
   background: rgba(168, 85, 247, 0.15);
   border-color: var(--accent-violet);
   color: #ffffff;
+}
+
+/* --------------------------------------------------------------------------
+   Navigation Page Helpers & Memory Wall Placeholder
+   -------------------------------------------------------------------------- */
+.text-link-btn {
+  background: transparent;
+  border: none;
+  color: var(--accent-violet);
+  font-size: 0.88rem;
+  font-weight: 600;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.75rem;
+  border-radius: 8px;
+  transition: all 0.2s ease;
+}
+
+.text-link-btn:hover {
+  color: #ffffff;
+  background: rgba(168, 85, 247, 0.15);
+}
+
+.list-meta-text {
+  font-size: 0.84rem;
+  color: var(--text-muted);
+  margin: 0.25rem 0 0;
+}
+
+.empty-filter-state {
+  grid-column: 1 / -1;
+  text-align: center;
+  padding: 3.5rem 1.5rem;
+  background: var(--bg-card);
+  border: 1px dashed var(--border-subtle);
+  border-radius: 16px;
+  color: var(--text-secondary);
+}
+
+.empty-state-title {
+  margin: 0 0 0.5rem;
+  font-size: 1.1rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.empty-state-text {
+  margin: 0;
+  font-size: 0.88rem;
+  color: var(--text-muted);
+}
+
+/* Memory Wall Placeholder */
+.placeholder-view {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  padding: 2.5rem 0;
+}
+
+.placeholder-card {
+  background: var(--bg-card);
+  border: 1px solid var(--border-subtle);
+  border-radius: 20px;
+  padding: 3rem 2.5rem;
+  max-width: 620px;
+  width: 100%;
+  text-align: center;
+  backdrop-filter: blur(12px);
+  box-shadow: 0 16px 36px -10px rgba(0, 0, 0, 0.5);
+}
+
+.placeholder-icon-wrap {
+  width: 68px;
+  height: 68px;
+  border-radius: 18px;
+  background: linear-gradient(135deg, rgba(168, 85, 247, 0.2), rgba(56, 189, 248, 0.2));
+  border: 1px solid rgba(168, 85, 247, 0.35);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  margin: 0 auto 1.5rem;
+  color: var(--accent-violet);
+  box-shadow: 0 0 24px rgba(168, 85, 247, 0.25);
+}
+
+.placeholder-title {
+  margin: 0 0 0.75rem;
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #ffffff;
+}
+
+.placeholder-text {
+  margin: 0 0 1.75rem;
+  font-size: 0.95rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+
+.placeholder-preview-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed var(--border-subtle);
+  border-radius: 12px;
+  padding: 1.25rem;
+  margin-bottom: 2rem;
+  text-align: left;
+}
+
+.placeholder-preview-title {
+  margin: 0 0 0.4rem;
+  font-size: 0.75rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--accent-cyan);
+  font-weight: 700;
+}
+
+.placeholder-preview-item {
+  margin: 0;
+  font-size: 0.9rem;
+  color: var(--text-primary);
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+}
+
+.placeholder-action-btn {
+  background: linear-gradient(135deg, var(--accent-purple), #6366f1);
+  color: #ffffff;
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  border-radius: 10px;
+  padding: 0.75rem 1.65rem;
+  font-size: 0.92rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(139, 92, 246, 0.3);
+}
+
+.placeholder-action-btn:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 6px 22px rgba(139, 92, 246, 0.45);
 }
 
 /* --------------------------------------------------------------------------

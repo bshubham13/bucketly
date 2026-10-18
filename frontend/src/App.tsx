@@ -52,11 +52,61 @@ const INITIAL_DREAMS: DreamItem[] = [
   }
 ]
 
+// Reusable Dream Card component to keep the code clean and avoid duplication
+function DreamCard({ dream }: { dream: DreamItem }) {
+  const statusClass = dream.status.toLowerCase().replace(/\s+/g, '-')
+
+  return (
+    <article className="dream-card">
+      <div>
+        <div className="card-top">
+          <span className="category-tag">{dream.category}</span>
+          <span className={`status-badge ${statusClass}`}>{dream.status}</span>
+        </div>
+
+        <h4 className="dream-title">{dream.title}</h4>
+        <p className="dream-desc">{dream.description}</p>
+      </div>
+
+      <div>
+        {/* Progress Bar */}
+        <div className="progress-container">
+          <div className="progress-labels">
+            <span>Milestone Progress</span>
+            <span>{dream.progress}%</span>
+          </div>
+          <div className="progress-track" role="progressbar" aria-valuenow={dream.progress} aria-valuemin={0} aria-valuemax={100}>
+            <div className="progress-fill" style={{ width: `${dream.progress}%` }} />
+          </div>
+        </div>
+
+        {/* Card Footer */}
+        <div className="card-footer">
+          <span className="target-badge">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <circle cx="12" cy="12" r="10"/>
+              <polyline points="12 6 12 12 16 14"/>
+            </svg>
+            {dream.targetDate}
+          </span>
+          <button
+            type="button"
+            className="mark-btn"
+            onClick={() => alert(`Goal "${dream.title}" selected.`)}
+          >
+            Details
+          </button>
+        </div>
+      </div>
+    </article>
+  )
+}
+
 function App() {
   // Navigation tab state: 'Dashboard' | 'My Bucket List' | 'Memory Wall'
   const [activeNav, setActiveNav] = useState<'Dashboard' | 'My Bucket List' | 'Memory Wall'>('Dashboard')
 
-  // Filter state for dream cards
+  // Filter state for dream cards on the My Bucket List page
   const [activeFilter, setActiveFilter] = useState<'All' | 'In Progress' | 'Completed' | 'Not Started'>('All')
 
   // Filter items based on activeFilter selection
@@ -65,10 +115,18 @@ function App() {
     return dream.status === activeFilter
   })
 
-  // Quick stats computed directly from our sample data
+  // Quick stats computed directly from sample data
   const totalCount = INITIAL_DREAMS.length
   const completedCount = INITIAL_DREAMS.filter(d => d.status === 'Completed').length
   const inProgressCount = INITIAL_DREAMS.filter(d => d.status === 'In Progress').length
+  const inProgressDreams = INITIAL_DREAMS.filter(d => d.status === 'In Progress')
+
+  // Subtitles customized for each page
+  const pageSubtitles = {
+    'Dashboard': 'Make Life Count — Overview of your life milestones and current focus.',
+    'My Bucket List': 'Browse, filter, and track all your lifelong dreams and aspirations.',
+    'Memory Wall': 'A visual journal celebrating every dream accomplished.'
+  }
 
   return (
     <div className="dashboard-layout">
@@ -152,7 +210,7 @@ function App() {
         <header className="top-bar">
           <div>
             <h2 className="page-title">{activeNav}</h2>
-            <p className="page-subtitle">Make Life Count — Keep pursuing what sets your soul on fire.</p>
+            <p className="page-subtitle">{pageSubtitles[activeNav]}</p>
           </div>
           <button
             type="button"
@@ -167,127 +225,173 @@ function App() {
           </button>
         </header>
 
-        {/* Hero Inspiration Banner */}
-        <section className="hero-banner" aria-label="Inspiration of the day">
-          <span className="hero-tag">🌟 Life Philosophy</span>
-          <blockquote className="hero-quote">
-            “The purpose of life is to live it, to taste experience to the utmost, to reach out eagerly and without fear for newer and richer experience.”
-          </blockquote>
-          <p className="hero-author">— Eleanor Roosevelt</p>
-        </section>
+        {/* ------------------------------------------------------------------ */}
+        {/* VIEW 1: Dashboard                                                  */}
+        {/* ------------------------------------------------------------------ */}
+        {activeNav === 'Dashboard' && (
+          <>
+            {/* Hero Inspiration Banner */}
+            <section className="hero-banner" aria-label="Inspiration of the day">
+              <span className="hero-tag">🌟 Life Philosophy</span>
+              <blockquote className="hero-quote">
+                “The purpose of life is to live it, to taste experience to the utmost, to reach out eagerly and without fear for newer and richer experience.”
+              </blockquote>
+              <p className="hero-author">— Eleanor Roosevelt</p>
+            </section>
 
-        {/* Overview Statistics Grid */}
-        <section className="stats-grid" aria-label="Overview Statistics">
-          <div className="stat-card">
-            <div className="stat-header">
-              <span className="stat-label">Total Dreams</span>
-              <span className="stat-icon-pill" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc' }} aria-hidden="true">✦</span>
-            </div>
-            <p className="stat-value">{totalCount}</p>
-            <p className="stat-caption">Lifelong aspirations registered</p>
-          </div>
+            {/* Overview Statistics Grid */}
+            <section className="stats-grid" aria-label="Overview Statistics">
+              <div className="stat-card">
+                <div className="stat-header">
+                  <span className="stat-label">Total Dreams</span>
+                  <span className="stat-icon-pill" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc' }} aria-hidden="true">✦</span>
+                </div>
+                <p className="stat-value">{totalCount}</p>
+                <p className="stat-caption">Lifelong aspirations registered</p>
+              </div>
 
-          <div className="stat-card">
-            <div className="stat-header">
-              <span className="stat-label">In Progress</span>
-              <span className="stat-icon-pill" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }} aria-hidden="true">⚡</span>
-            </div>
-            <p className="stat-value">{inProgressCount}</p>
-            <p className="stat-caption">Actively being pursued right now</p>
-          </div>
+              <div className="stat-card">
+                <div className="stat-header">
+                  <span className="stat-label">In Progress</span>
+                  <span className="stat-icon-pill" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }} aria-hidden="true">⚡</span>
+                </div>
+                <p className="stat-value">{inProgressCount}</p>
+                <p className="stat-caption">Actively being pursued right now</p>
+              </div>
 
-          <div className="stat-card">
-            <div className="stat-header">
-              <span className="stat-label">Accomplished</span>
-              <span className="stat-icon-pill" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }} aria-hidden="true">✓</span>
-            </div>
-            <p className="stat-value">{completedCount}</p>
-            <p className="stat-caption">Memories etched in stone</p>
-          </div>
+              <div className="stat-card">
+                <div className="stat-header">
+                  <span className="stat-label">Accomplished</span>
+                  <span className="stat-icon-pill" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }} aria-hidden="true">✓</span>
+                </div>
+                <p className="stat-value">{completedCount}</p>
+                <p className="stat-caption">Memories etched in stone</p>
+              </div>
 
-          <div className="stat-card">
-            <div className="stat-header">
-              <span className="stat-label">Next Target Year</span>
-              <span className="stat-icon-pill" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }} aria-hidden="true">🎯</span>
-            </div>
-            <p className="stat-value">2026</p>
-            <p className="stat-caption">Tromsø & Portfolio milestones</p>
-          </div>
-        </section>
+              <div className="stat-card">
+                <div className="stat-header">
+                  <span className="stat-label">Next Target Year</span>
+                  <span className="stat-icon-pill" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }} aria-hidden="true">🎯</span>
+                </div>
+                <p className="stat-value">2026</p>
+                <p className="stat-caption">Tromsø & Portfolio milestones</p>
+              </div>
+            </section>
 
-        {/* Dreams / Bucket List Cards Section */}
-        <section aria-label="Aspirations List">
-          <div className="section-top">
-            <h3 className="section-title">Current Aspirations</h3>
-            <div className="filters-wrapper" role="group" aria-label="Filter aspirations by status">
-              {(['All', 'In Progress', 'Completed', 'Not Started'] as const).map((filterName) => (
+            {/* In-Progress Milestones Spotlight */}
+            <section aria-label="Active Focus Milestones">
+              <div className="section-top">
+                <div>
+                  <h3 className="section-title">Active Milestones</h3>
+                  <p className="list-meta-text">Goals currently being pursued right now ({inProgressDreams.length})</p>
+                </div>
                 <button
-                  key={filterName}
                   type="button"
-                  className={`filter-chip ${activeFilter === filterName ? 'active' : ''}`}
-                  onClick={() => setActiveFilter(filterName)}
+                  className="text-link-btn"
+                  onClick={() => setActiveNav('My Bucket List')}
                 >
-                  {filterName}
+                  View Full Bucket List ({totalCount}) →
                 </button>
-              ))}
+              </div>
+
+              <div className="dreams-grid">
+                {inProgressDreams.map((dream) => (
+                  <DreamCard key={dream.id} dream={dream} />
+                ))}
+              </div>
+            </section>
+          </>
+        )}
+
+        {/* ------------------------------------------------------------------ */}
+        {/* VIEW 2: My Bucket List (Dedicated Exploration & Filter View)      */}
+        {/* ------------------------------------------------------------------ */}
+        {activeNav === 'My Bucket List' && (
+          <section aria-label="My Complete Bucket List">
+            <div className="section-top">
+              <div>
+                <h3 className="section-title">All Aspirations</h3>
+                <p className="list-meta-text">Showing {filteredDreams.length} of {totalCount} dreams</p>
+              </div>
+
+              <div className="filters-wrapper" role="group" aria-label="Filter aspirations by status">
+                {(['All', 'In Progress', 'Completed', 'Not Started'] as const).map((filterName) => (
+                  <button
+                    key={filterName}
+                    type="button"
+                    className={`filter-chip ${activeFilter === filterName ? 'active' : ''}`}
+                    onClick={() => setActiveFilter(filterName)}
+                  >
+                    {filterName}
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
 
-          <div className="dreams-grid">
-            {filteredDreams.map((dream) => {
-              const statusClass = dream.status.toLowerCase().replace(/\s+/g, '-')
+            <div className="dreams-grid">
+              {filteredDreams.length > 0 ? (
+                filteredDreams.map((dream) => (
+                  <DreamCard key={dream.id} dream={dream} />
+                ))
+              ) : (
+                <div className="empty-filter-state">
+                  <p className="empty-state-title">No dreams found</p>
+                  <p className="empty-state-text">No aspirations currently match the "{activeFilter}" filter.</p>
+                  <button
+                    type="button"
+                    className="placeholder-action-btn"
+                    style={{ marginTop: '1rem' }}
+                    onClick={() => setActiveFilter('All')}
+                  >
+                    Reset Filter to All
+                  </button>
+                </div>
+              )}
+            </div>
+          </section>
+        )}
 
-              return (
-                <article key={dream.id} className="dream-card">
-                  <div>
-                    <div className="card-top">
-                      <span className="category-tag">{dream.category}</span>
-                      <span className={`status-badge ${statusClass}`}>{dream.status}</span>
-                    </div>
+        {/* ------------------------------------------------------------------ */}
+        {/* VIEW 3: Memory Wall (Placeholder View)                             */}
+        {/* ------------------------------------------------------------------ */}
+        {activeNav === 'Memory Wall' && (
+          <section className="placeholder-view" aria-label="Memory Wall Placeholder">
+            <div className="placeholder-card">
+              <div className="placeholder-icon-wrap" aria-hidden="true">
+                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
+                  <circle cx="12" cy="13" r="3"/>
+                </svg>
+              </div>
 
-                    <h4 className="dream-title">{dream.title}</h4>
-                    <p className="dream-desc">{dream.description}</p>
-                  </div>
+              <h3 className="placeholder-title">Memory Wall Coming Soon</h3>
+              <p className="placeholder-text">
+                This space is reserved for celebrating completed experiences. Once you mark a bucket list dream as finished, you will be able to attach photos, reflections, and dates here to preserve the milestone forever.
+              </p>
 
-                  <div>
-                    {/* Progress Bar */}
-                    <div className="progress-container">
-                      <div className="progress-labels">
-                        <span>Milestone Progress</span>
-                        <span>{dream.progress}%</span>
-                      </div>
-                      <div className="progress-track" role="progressbar" aria-valuenow={dream.progress} aria-valuemin={0} aria-valuemax={100}>
-                        <div className="progress-fill" style={{ width: `${dream.progress}%` }} />
-                      </div>
-                    </div>
+              <div className="placeholder-preview-box">
+                <p className="placeholder-preview-title">First Completed Memory Ready</p>
+                <p className="placeholder-preview-item">
+                  <span style={{ color: 'var(--accent-emerald)', fontWeight: 'bold' }}>✓</span>
+                  Stargazing Camp in the Sahara Desert (Achieved Oct 2025)
+                </p>
+              </div>
 
-                    {/* Card Footer */}
-                    <div className="card-footer">
-                      <span className="target-badge">
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-                          <circle cx="12" cy="12" r="10"/>
-                          <polyline points="12 6 12 12 16 14"/>
-                        </svg>
-                        {dream.targetDate}
-                      </span>
-                      <button
-                        type="button"
-                        className="mark-btn"
-                        onClick={() => alert(`Goal "${dream.title}" selected.`)}
-                      >
-                        Details
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              )
-            })}
-          </div>
-        </section>
+              <button
+                type="button"
+                className="placeholder-action-btn"
+                onClick={() => setActiveNav('My Bucket List')}
+              >
+                Explore My Bucket List
+              </button>
+            </div>
+          </section>
+        )}
       </main>
     </div>
   )
 }
 
 export default App
+
 
