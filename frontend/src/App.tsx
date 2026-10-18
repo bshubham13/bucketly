@@ -106,26 +106,83 @@ function App() {
   // Navigation tab state: 'Dashboard' | 'My Bucket List' | 'Memory Wall'
   const [activeNav, setActiveNav] = useState<'Dashboard' | 'My Bucket List' | 'Memory Wall'>('Dashboard')
 
+  // Main state holding the list of dreams (initialized with our sample data)
+  const [dreams, setDreams] = useState<DreamItem[]>(INITIAL_DREAMS)
+
   // Filter state for dream cards on the My Bucket List page
   const [activeFilter, setActiveFilter] = useState<'All' | 'In Progress' | 'Completed' | 'Not Started'>('All')
 
+  // Modal dialog open/closed state
+  const [isModalOpen, setIsModalOpen] = useState(false)
+
+  // Form input states
+  const [title, setTitle] = useState('')
+  const [category, setCategory] = useState('Travel & Nature')
+  const [description, setDescription] = useState('')
+  const [targetDate, setTargetDate] = useState('')
+  const [status, setStatus] = useState<'Not Started' | 'In Progress'>('Not Started')
+  const [titleError, setTitleError] = useState('')
+
   // Filter items based on activeFilter selection
-  const filteredDreams = INITIAL_DREAMS.filter((dream) => {
+  const filteredDreams = dreams.filter((dream) => {
     if (activeFilter === 'All') return true
     return dream.status === activeFilter
   })
 
-  // Quick stats computed directly from sample data
-  const totalCount = INITIAL_DREAMS.length
-  const completedCount = INITIAL_DREAMS.filter(d => d.status === 'Completed').length
-  const inProgressCount = INITIAL_DREAMS.filter(d => d.status === 'In Progress').length
-  const inProgressDreams = INITIAL_DREAMS.filter(d => d.status === 'In Progress')
+  // Quick stats computed reactively from the stateful dreams array
+  const totalCount = dreams.length
+  const completedCount = dreams.filter(d => d.status === 'Completed').length
+  const inProgressCount = dreams.filter(d => d.status === 'In Progress').length
+  const inProgressDreams = dreams.filter(d => d.status === 'In Progress')
 
   // Subtitles customized for each page
   const pageSubtitles = {
     'Dashboard': 'Make Life Count — Overview of your life milestones and current focus.',
     'My Bucket List': 'Browse, filter, and track all your lifelong dreams and aspirations.',
     'Memory Wall': 'A visual journal celebrating every dream accomplished.'
+  }
+
+  // Open modal and reset inputs
+  const handleOpenModal = () => {
+    setTitle('')
+    setCategory('Travel & Nature')
+    setDescription('')
+    setTargetDate('')
+    setStatus('Not Started')
+    setTitleError('')
+    setIsModalOpen(true)
+  }
+
+  // Close modal and clear validation errors
+  const handleCloseModal = () => {
+    setIsModalOpen(false)
+    setTitleError('')
+  }
+
+  // Handle form submission with required field validation
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault()
+
+    // Validate required title
+    if (!title.trim()) {
+      setTitleError('Please enter a title for your dream.')
+      return
+    }
+
+    const newDream: DreamItem = {
+      id: Date.now(),
+      title: title.trim(),
+      category,
+      status,
+      // If user marks as In Progress, give an encouraging initial milestone progress
+      progress: status === 'In Progress' ? 20 : 0,
+      targetDate: targetDate.trim() || 'Flexible Target',
+      description: description.trim() || 'No description provided yet.'
+    }
+
+    // Prepend the new dream so it appears first in the list
+    setDreams((prev) => [newDream, ...prev])
+    handleCloseModal()
   }
 
   return (
@@ -215,7 +272,7 @@ function App() {
           <button
             type="button"
             className="add-dream-btn"
-            onClick={() => alert('Add Dream modal will be connected as we build interactive forms!')}
+            onClick={handleOpenModal}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M5 12h14"/>
@@ -388,6 +445,164 @@ function App() {
           </section>
         )}
       </main>
+
+      {/* -------------------------------------------------------------------- */}
+      {/* Modal: Add New Dream Form                                            */}
+      {/* -------------------------------------------------------------------- */}
+      {isModalOpen && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) handleCloseModal()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') handleCloseModal()
+          }}
+          role="presentation"
+        >
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="modal-title"
+          >
+            {/* Modal Header */}
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <div className="modal-badge-icon" aria-hidden="true">✦</div>
+                <div>
+                  <h3 id="modal-title" className="modal-title">Add New Dream</h3>
+                  <p className="modal-subtitle">Make Life Count — What aspiration will you chase?</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseModal}
+                aria-label="Close dialog"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Modal Form */}
+            <form onSubmit={handleSubmit} className="modal-form" noValidate>
+              {/* Field 1: Title (Required) */}
+              <div className="form-group">
+                <label htmlFor="dream-title" className="form-label">
+                  Dream Title
+                  <span className="required-badge">* Required</span>
+                </label>
+                <input
+                  id="dream-title"
+                  type="text"
+                  className={`form-input ${titleError ? 'input-error' : ''}`}
+                  placeholder="e.g. Scuba dive the Great Barrier Reef"
+                  value={title}
+                  onChange={(e) => {
+                    setTitle(e.target.value)
+                    if (titleError) setTitleError('')
+                  }}
+                  autoFocus
+                  aria-invalid={!!titleError}
+                  aria-describedby={titleError ? 'title-error-msg' : undefined}
+                />
+                {titleError && (
+                  <p id="title-error-msg" className="error-message" role="alert">
+                    <span>⚠</span> {titleError}
+                  </p>
+                )}
+              </div>
+
+              {/* Field 2 & 3: Category & Initial Status (2 Columns) */}
+              <div className="form-row">
+                <div className="form-group">
+                  <label htmlFor="dream-category" className="form-label">
+                    Category
+                  </label>
+                  <select
+                    id="dream-category"
+                    className="form-select"
+                    value={category}
+                    onChange={(e) => setCategory(e.target.value)}
+                  >
+                    <option value="Travel & Nature">Travel & Nature</option>
+                    <option value="Fitness & Health">Fitness & Health</option>
+                    <option value="Career & Tech">Career & Tech</option>
+                    <option value="Personal Growth">Personal Growth</option>
+                    <option value="Adventure">Adventure</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+
+                <div className="form-group">
+                  <label htmlFor="dream-status" className="form-label">
+                    Initial Status
+                  </label>
+                  <select
+                    id="dream-status"
+                    className="form-select"
+                    value={status}
+                    onChange={(e) => setStatus(e.target.value as 'Not Started' | 'In Progress')}
+                  >
+                    <option value="Not Started">Not Started</option>
+                    <option value="In Progress">In Progress</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Field 4: Target Date (Optional) */}
+              <div className="form-group">
+                <label htmlFor="dream-target" className="form-label">
+                  Target Date
+                  <span className="optional-badge">(Optional)</span>
+                </label>
+                <input
+                  id="dream-target"
+                  type="text"
+                  className="form-input"
+                  placeholder="e.g. Summer 2026 or Dec 2027"
+                  value={targetDate}
+                  onChange={(e) => setTargetDate(e.target.value)}
+                />
+              </div>
+
+              {/* Field 5: Description (Optional) */}
+              <div className="form-group">
+                <label htmlFor="dream-desc" className="form-label">
+                  Description
+                  <span className="optional-badge">(Optional)</span>
+                </label>
+                <textarea
+                  id="dream-desc"
+                  className="form-textarea"
+                  placeholder="Why is this meaningful? Add any specific details or vision..."
+                  rows={3}
+                  value={description}
+                  onChange={(e) => setDescription(e.target.value)}
+                />
+              </div>
+
+              {/* Form Action Buttons */}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleCloseModal}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                >
+                  Add to Bucket List
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
     </div>
   )
 }
