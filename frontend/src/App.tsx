@@ -53,7 +53,15 @@ const INITIAL_DREAMS: DreamItem[] = [
 ]
 
 // Reusable Dream Card component to keep the code clean and avoid duplication
-function DreamCard({ dream }: { dream: DreamItem }) {
+function DreamCard({
+  dream,
+  onEdit,
+  onDelete
+}: {
+  dream: DreamItem
+  onEdit: (dream: DreamItem) => void
+  onDelete: (dream: DreamItem) => void
+}) {
   const statusClass = dream.status.toLowerCase().replace(/\s+/g, '-')
 
   return (
@@ -89,13 +97,34 @@ function DreamCard({ dream }: { dream: DreamItem }) {
             </svg>
             {dream.targetDate}
           </span>
-          <button
-            type="button"
-            className="mark-btn"
-            onClick={() => alert(`Goal "${dream.title}" selected.`)}
-          >
-            Details
-          </button>
+
+          <div className="card-action-group">
+            <button
+              type="button"
+              className="card-btn edit-btn"
+              onClick={() => onEdit(dream)}
+              aria-label={`Edit "${dream.title}"`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                <path d="m15 5 4 4"/>
+              </svg>
+              Edit
+            </button>
+            <button
+              type="button"
+              className="card-btn delete-btn"
+              onClick={() => onDelete(dream)}
+              aria-label={`Delete "${dream.title}"`}
+            >
+              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M3 6h18"/>
+                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+              </svg>
+              Delete
+            </button>
+          </div>
         </div>
       </div>
     </article>
@@ -112,15 +141,20 @@ function App() {
   // Filter state for dream cards on the My Bucket List page
   const [activeFilter, setActiveFilter] = useState<'All' | 'In Progress' | 'Completed' | 'Not Started'>('All')
 
-  // Modal dialog open/closed state
+  // Modal dialog open/closed state & mode ('add' | 'edit')
   const [isModalOpen, setIsModalOpen] = useState(false)
+  const [modalMode, setModalMode] = useState<'add' | 'edit'>('add')
+  const [editingDreamId, setEditingDreamId] = useState<number | null>(null)
+
+  // Delete confirmation modal state
+  const [deletingDream, setDeletingDream] = useState<DreamItem | null>(null)
 
   // Form input states
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('Travel & Nature')
   const [description, setDescription] = useState('')
   const [targetDate, setTargetDate] = useState('')
-  const [status, setStatus] = useState<'Not Started' | 'In Progress'>('Not Started')
+  const [status, setStatus] = useState<'Not Started' | 'In Progress' | 'Completed'>('Not Started')
   const [titleError, setTitleError] = useState('')
 
   // Filter items based on activeFilter selection
@@ -142,8 +176,10 @@ function App() {
     'Memory Wall': 'A visual journal celebrating every dream accomplished.'
   }
 
-  // Open modal and reset inputs
-  const handleOpenModal = () => {
+  // Open modal in "Add" mode
+  const handleOpenAddModal = () => {
+    setModalMode('add')
+    setEditingDreamId(null)
     setTitle('')
     setCategory('Travel & Nature')
     setDescription('')
@@ -153,13 +189,40 @@ function App() {
     setIsModalOpen(true)
   }
 
-  // Close modal and clear validation errors
+  // Open modal in "Edit" mode with prefilled values
+  const handleOpenEditModal = (dream: DreamItem) => {
+    setModalMode('edit')
+    setEditingDreamId(dream.id)
+    setTitle(dream.title)
+    setCategory(dream.category)
+    setDescription(dream.description === 'No description provided yet.' ? '' : dream.description)
+    setTargetDate(dream.targetDate === 'Flexible Target' ? '' : dream.targetDate)
+    setStatus(dream.status)
+    setTitleError('')
+    setIsModalOpen(true)
+  }
+
+  // Close form modal and clear validation errors
   const handleCloseModal = () => {
     setIsModalOpen(false)
+    setEditingDreamId(null)
     setTitleError('')
   }
 
-  // Handle form submission with required field validation
+  // Open delete confirmation modal
+  const handleOpenDeleteModal = (dream: DreamItem) => {
+    setDeletingDream(dream)
+  }
+
+  // Confirm delete and remove the dream from state
+  const handleConfirmDelete = () => {
+    if (deletingDream) {
+      setDreams((prev) => prev.filter((d) => d.id !== deletingDream.id))
+      setDeletingDream(null)
+    }
+  }
+
+  // Handle form submission for both Add and Edit modes
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault()
 
@@ -169,19 +232,51 @@ function App() {
       return
     }
 
-    const newDream: DreamItem = {
-      id: Date.now(),
-      title: title.trim(),
-      category,
-      status,
-      // If user marks as In Progress, give an encouraging initial milestone progress
-      progress: status === 'In Progress' ? 20 : 0,
-      targetDate: targetDate.trim() || 'Flexible Target',
-      description: description.trim() || 'No description provided yet.'
+    if (modalMode === 'add') {
+      let initialProgress = 0
+      if (status === 'In Progress') initialProgress = 20
+      if (status === 'Completed') initialProgress = 100
+
+      const newDream: DreamItem = {
+        id: Date.now(),
+        title: title.trim(),
+        category,
+        status,
+        progress: initialProgress,
+        targetDate: targetDate.trim() || 'Flexible Target',
+        description: description.trim() || 'No description provided yet.'
+      }
+
+      // Prepend the new dream so it appears first in the list
+      setDreams((prev) => [newDream, ...prev])
+    } else if (modalMode === 'edit' && editingDreamId !== null) {
+      // Update existing dream while keeping its stable ID and consistent progress
+      setDreams((prev) =>
+        prev.map((d) => {
+          if (d.id !== editingDreamId) return d
+
+          let updatedProgress = d.progress
+          if (status === 'Completed') {
+            updatedProgress = 100
+          } else if (status === 'Not Started') {
+            updatedProgress = 0
+          } else if (status === 'In Progress' && updatedProgress === 0) {
+            updatedProgress = 20
+          }
+
+          return {
+            ...d,
+            title: title.trim(),
+            category,
+            status,
+            progress: updatedProgress,
+            targetDate: targetDate.trim() || 'Flexible Target',
+            description: description.trim() || 'No description provided yet.'
+          }
+        })
+      )
     }
 
-    // Prepend the new dream so it appears first in the list
-    setDreams((prev) => [newDream, ...prev])
     handleCloseModal()
   }
 
@@ -272,7 +367,7 @@ function App() {
           <button
             type="button"
             className="add-dream-btn"
-            onClick={handleOpenModal}
+            onClick={handleOpenAddModal}
           >
             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
               <path d="M5 12h14"/>
@@ -353,7 +448,12 @@ function App() {
 
               <div className="dreams-grid">
                 {inProgressDreams.map((dream) => (
-                  <DreamCard key={dream.id} dream={dream} />
+                  <DreamCard
+                    key={dream.id}
+                    dream={dream}
+                    onEdit={handleOpenEditModal}
+                    onDelete={handleOpenDeleteModal}
+                  />
                 ))}
               </div>
             </section>
@@ -388,7 +488,12 @@ function App() {
             <div className="dreams-grid">
               {filteredDreams.length > 0 ? (
                 filteredDreams.map((dream) => (
-                  <DreamCard key={dream.id} dream={dream} />
+                  <DreamCard
+                    key={dream.id}
+                    dream={dream}
+                    onEdit={handleOpenEditModal}
+                    onDelete={handleOpenDeleteModal}
+                  />
                 ))
               ) : (
                 <div className="empty-filter-state">
@@ -447,7 +552,7 @@ function App() {
       </main>
 
       {/* -------------------------------------------------------------------- */}
-      {/* Modal: Add New Dream Form                                            */}
+      {/* Modal: Add / Edit Dream Form (Reused Modal Component)                */}
       {/* -------------------------------------------------------------------- */}
       {isModalOpen && (
         <div
@@ -469,10 +574,18 @@ function App() {
             {/* Modal Header */}
             <div className="modal-header">
               <div className="modal-title-group">
-                <div className="modal-badge-icon" aria-hidden="true">✦</div>
+                <div className="modal-badge-icon" aria-hidden="true">
+                  {modalMode === 'edit' ? '✎' : '✦'}
+                </div>
                 <div>
-                  <h3 id="modal-title" className="modal-title">Add New Dream</h3>
-                  <p className="modal-subtitle">Make Life Count — What aspiration will you chase?</p>
+                  <h3 id="modal-title" className="modal-title">
+                    {modalMode === 'edit' ? 'Edit Dream' : 'Add New Dream'}
+                  </h3>
+                  <p className="modal-subtitle">
+                    {modalMode === 'edit'
+                      ? 'Update your aspiration details and current progress.'
+                      : 'Make Life Count — What aspiration will you chase?'}
+                  </p>
                 </div>
               </div>
               <button
@@ -514,7 +627,7 @@ function App() {
                 )}
               </div>
 
-              {/* Field 2 & 3: Category & Initial Status (2 Columns) */}
+              {/* Field 2 & 3: Category & Status */}
               <div className="form-row">
                 <div className="form-group">
                   <label htmlFor="dream-category" className="form-label">
@@ -537,16 +650,17 @@ function App() {
 
                 <div className="form-group">
                   <label htmlFor="dream-status" className="form-label">
-                    Initial Status
+                    Status
                   </label>
                   <select
                     id="dream-status"
                     className="form-select"
                     value={status}
-                    onChange={(e) => setStatus(e.target.value as 'Not Started' | 'In Progress')}
+                    onChange={(e) => setStatus(e.target.value as 'Not Started' | 'In Progress' | 'Completed')}
                   >
                     <option value="Not Started">Not Started</option>
                     <option value="In Progress">In Progress</option>
+                    <option value="Completed">Completed</option>
                   </select>
                 </div>
               </div>
@@ -596,10 +710,91 @@ function App() {
                   type="submit"
                   className="btn-primary"
                 >
-                  Add to Bucket List
+                  {modalMode === 'edit' ? 'Save Changes' : 'Add to Bucket List'}
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------------- */}
+      {/* Modal: Delete Confirmation Dialog                                   */}
+      {/* -------------------------------------------------------------------- */}
+      {deletingDream && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setDeletingDream(null)
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape') setDeletingDream(null)
+          }}
+          role="presentation"
+        >
+          <div
+            className="modal-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-dialog-title"
+            aria-describedby="delete-dialog-desc"
+            style={{ maxWidth: '460px' }}
+          >
+            {/* Delete Modal Header */}
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <div className="modal-badge-icon danger" aria-hidden="true">🗑</div>
+                <div>
+                  <h3 id="delete-dialog-title" className="modal-title">Delete Dream?</h3>
+                  <p className="modal-subtitle">This action cannot be undone.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={() => setDeletingDream(null)}
+                aria-label="Close delete confirmation"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem 1.75rem' }}>
+              <p id="delete-dialog-desc" style={{ margin: 0, fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Are you sure you want to remove this aspiration from your bucket list? Your dashboard statistics will be updated immediately.
+              </p>
+
+              {/* Preview Box of the Dream to be deleted */}
+              <div className="delete-preview-box">
+                <p className="delete-preview-title">{deletingDream.title}</p>
+                <div className="delete-preview-meta">
+                  <span>{deletingDream.category}</span>
+                  <span>•</span>
+                  <span>{deletingDream.status}</span>
+                  <span>•</span>
+                  <span>{deletingDream.targetDate}</span>
+                </div>
+              </div>
+
+              {/* Confirmation Actions */}
+              <div className="modal-actions" style={{ marginTop: 0, paddingTop: '1rem' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={() => setDeletingDream(null)}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-danger"
+                  onClick={handleConfirmDelete}
+                  autoFocus
+                >
+                  Delete Dream
+                </button>
+              </div>
+            </div>
           </div>
         </div>
       )}
@@ -608,5 +803,6 @@ function App() {
 }
 
 export default App
+
 
 

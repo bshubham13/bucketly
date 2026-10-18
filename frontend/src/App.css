@@ -510,6 +510,38 @@
   color: #ffffff;
 }
 
+.card-action-group {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.card-btn {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-secondary);
+  padding: 0.35rem 0.65rem;
+  border-radius: 6px;
+  font-size: 0.75rem;
+  font-weight: 500;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  transition: all 0.2s ease;
+}
+
+.card-btn.edit-btn:hover {
+  background: rgba(168, 85, 247, 0.15);
+  border-color: var(--accent-violet);
+  color: #ffffff;
+}
+
+.card-btn.delete-btn:hover {
+  background: rgba(244, 63, 94, 0.15);
+  border-color: #f43f5e;
+  color: #fb7185;
+}
+
 /* --------------------------------------------------------------------------
    Navigation Page Helpers & Memory Wall Placeholder
    -------------------------------------------------------------------------- */
@@ -897,6 +929,53 @@
 .btn-primary:hover {
   transform: translateY(-1px);
   box-shadow: 0 6px 20px rgba(139, 92, 246, 0.5);
+}
+
+.btn-danger {
+  background: linear-gradient(135deg, #e11d48, #be123c);
+  border: 1px solid rgba(255, 255, 255, 0.15);
+  color: #ffffff;
+  border-radius: 10px;
+  padding: 0.7rem 1.4rem;
+  font-size: 0.88rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  box-shadow: 0 4px 16px rgba(225, 29, 72, 0.35);
+}
+
+.btn-danger:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(225, 29, 72, 0.55);
+}
+
+.modal-badge-icon.danger {
+  background: linear-gradient(135deg, #f43f5e, #be123c);
+  box-shadow: 0 0 16px rgba(244, 63, 94, 0.4);
+}
+
+.delete-preview-box {
+  background: rgba(255, 255, 255, 0.03);
+  border: 1px dashed rgba(244, 63, 94, 0.35);
+  border-radius: 12px;
+  padding: 1.15rem 1.25rem;
+  margin: 1.25rem 0 1.5rem;
+  text-align: left;
+}
+
+.delete-preview-title {
+  margin: 0 0 0.35rem;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #ffffff;
+}
+
+.delete-preview-meta {
+  margin: 0;
+  font-size: 0.82rem;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
 }
 
 /* --------------------------------------------------------------------------
