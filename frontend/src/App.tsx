@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import './App.css'
 import { dreamApi, type DreamRequest, type DreamResponse } from './services/dreamService'
+import { memoryApi, type MemoryCreateRequest, type MemoryUpdateRequest, type MemoryResponse } from './services/memoryService'
 
 // Simple, beginner-friendly TypeScript type representing one bucket list goal
 export interface DreamItem {
@@ -122,27 +123,32 @@ function App() {
   // Navigation tab state: 'Dashboard' | 'My Bucket List' | 'Memory Wall'
   const [activeNav, setActiveNav] = useState<'Dashboard' | 'My Bucket List' | 'Memory Wall'>('Dashboard')
 
-  // Main state holding the list of dreams (backend is the single source of truth)
+  // Main state holding dreams (backend is the single source of truth)
   const [dreams, setDreams] = useState<DreamItem[]>([])
   const [isLoading, setIsLoading] = useState<boolean>(true)
   const [fetchError, setFetchError] = useState<string | null>(null)
 
+  // Main state holding memories for Memory Wall
+  const [memories, setMemories] = useState<MemoryResponse[]>([])
+  const [isMemoriesLoading, setIsMemoriesLoading] = useState<boolean>(false)
+  const [memoriesError, setMemoriesError] = useState<string | null>(null)
+
   // Filter state for dream cards on the My Bucket List page
   const [activeFilter, setActiveFilter] = useState<'All' | 'In Progress' | 'Completed' | 'Not Started'>('All')
 
-  // Modal dialog open/closed state & mode ('add' | 'edit')
+  // Modal dialog state for Dreams ('add' | 'edit')
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add')
   const [editingDreamId, setEditingDreamId] = useState<number | null>(null)
   const [actionError, setActionError] = useState<string | null>(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  // Delete confirmation modal state
+  // Delete confirmation modal state for Dreams
   const [deletingDream, setDeletingDream] = useState<DreamItem | null>(null)
   const [deleteError, setDeleteError] = useState<string | null>(null)
   const [isDeleting, setIsDeleting] = useState(false)
 
-  // Form input states
+  // Form input states for Dreams
   const [title, setTitle] = useState('')
   const [category, setCategory] = useState('Travel & Nature')
   const [description, setDescription] = useState('')
@@ -150,7 +156,24 @@ function App() {
   const [status, setStatus] = useState<'Not Started' | 'In Progress' | 'Completed'>('Not Started')
   const [titleError, setTitleError] = useState('')
 
-  // Load dreams from backend API on initial mount
+  // Modal dialog state for Memories ('add' | 'edit')
+  const [isMemoryModalOpen, setIsMemoryModalOpen] = useState(false)
+  const [memoryModalMode, setMemoryModalMode] = useState<'add' | 'edit'>('add')
+  const [editingMemoryId, setEditingMemoryId] = useState<number | null>(null)
+  const [memoryFormError, setMemoryFormError] = useState<string | null>(null)
+  const [isSubmittingMemory, setIsSubmittingMemory] = useState(false)
+
+  // Delete confirmation modal state for Memories
+  const [deletingMemory, setDeletingMemory] = useState<MemoryResponse | null>(null)
+  const [deleteMemoryError, setDeleteMemoryError] = useState<string | null>(null)
+  const [isDeletingMemory, setIsDeletingMemory] = useState(false)
+
+  // Form input states for Memories
+  const [selectedDreamId, setSelectedDreamId] = useState<number | ''>('')
+  const [completedDate, setCompletedDate] = useState('')
+  const [story, setStory] = useState('')
+
+  // Load dreams from backend API
   const loadDreams = async () => {
     setIsLoading(true)
     setFetchError(null)
@@ -166,9 +189,31 @@ function App() {
     }
   }
 
+  // Load memories from backend API
+  const loadMemories = async () => {
+    setIsMemoriesLoading(true)
+    setMemoriesError(null)
+    try {
+      const data = await memoryApi.getAll()
+      setMemories(data)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unable to load Memory Wall reflections from backend.'
+      setMemoriesError(message)
+      setMemories([])
+    } finally {
+      setIsMemoriesLoading(false)
+    }
+  }
+
   useEffect(() => {
     loadDreams()
+    loadMemories()
   }, [])
+
+  // Eligible dreams for memory creation: dreams that do NOT already have a memory
+  const eligibleDreams = dreams.filter(
+    (d) => !memories.some((m) => m.dreamId === d.id)
+  )
 
   // Filter items based on activeFilter selection
   const filteredDreams = dreams.filter((dream) => {
@@ -186,10 +231,15 @@ function App() {
   const pageSubtitles = {
     'Dashboard': 'Make Life Count — Overview of your life milestones and current focus.',
     'My Bucket List': 'Browse, filter, and track all your lifelong dreams and aspirations.',
-    'Memory Wall': 'A visual journal celebrating every dream accomplished.'
+    'Memory Wall': 'A visual journal celebrating every accomplished dream and reflection.'
   }
 
-  // Open modal in "Add" mode
+  // Today's date in YYYY-MM-DD format for date picker max attribute
+  const todayStr = new Date().toISOString().split('T')[0]
+
+  // --------------------------------------------------------------------------
+  // Dream Modal Handlers
+  // --------------------------------------------------------------------------
   const handleOpenAddModal = () => {
     setModalMode('add')
     setEditingDreamId(null)
@@ -203,7 +253,6 @@ function App() {
     setIsModalOpen(true)
   }
 
-  // Open modal in "Edit" mode with prefilled values
   const handleOpenEditModal = (dream: DreamItem) => {
     setModalMode('edit')
     setEditingDreamId(dream.id)
@@ -217,7 +266,6 @@ function App() {
     setIsModalOpen(true)
   }
 
-  // Close form modal and clear validation errors
   const handleCloseModal = () => {
     setIsModalOpen(false)
     setEditingDreamId(null)
@@ -225,19 +273,16 @@ function App() {
     setActionError(null)
   }
 
-  // Open delete confirmation modal
   const handleOpenDeleteModal = (dream: DreamItem) => {
     setDeletingDream(dream)
     setDeleteError(null)
   }
 
-  // Close delete confirmation modal
   const handleCloseDeleteModal = () => {
     setDeletingDream(null)
     setDeleteError(null)
   }
 
-  // Confirm delete and remove the dream from state via DELETE /api/dreams/{id}
   const handleConfirmDelete = async () => {
     if (!deletingDream) return
     setIsDeleting(true)
@@ -245,6 +290,8 @@ function App() {
     try {
       await dreamApi.delete(deletingDream.id)
       setDreams((prev) => prev.filter((d) => d.id !== deletingDream.id))
+      // If the deleted dream had a memory, remove it from memory state as well
+      setMemories((prev) => prev.filter((m) => m.dreamId !== deletingDream.id))
       setDeletingDream(null)
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Failed to delete dream. Please check backend connection.'
@@ -254,11 +301,9 @@ function App() {
     }
   }
 
-  // Handle form submission for both Add (POST) and Edit (PUT) modes
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
-    // Validate required title
     if (!title.trim()) {
       setTitleError('Please enter a title for your dream.')
       return
@@ -294,6 +339,126 @@ function App() {
       setActionError(message)
     } finally {
       setIsSubmitting(false)
+    }
+  }
+
+  // --------------------------------------------------------------------------
+  // Memory Modal Handlers
+  // --------------------------------------------------------------------------
+  const handleOpenAddMemoryModal = (preselectedDreamId?: number) => {
+    setMemoryModalMode('add')
+    setEditingMemoryId(null)
+
+    if (preselectedDreamId && eligibleDreams.some((d) => d.id === preselectedDreamId)) {
+      setSelectedDreamId(preselectedDreamId)
+    } else if (eligibleDreams.length > 0) {
+      setSelectedDreamId(eligibleDreams[0].id)
+    } else {
+      setSelectedDreamId('')
+    }
+
+    setCompletedDate(todayStr)
+    setStory('')
+    setMemoryFormError(null)
+    setIsMemoryModalOpen(true)
+  }
+
+  const handleOpenEditMemoryModal = (memory: MemoryResponse) => {
+    setMemoryModalMode('edit')
+    setEditingMemoryId(memory.id)
+    setSelectedDreamId(memory.dreamId)
+    setCompletedDate(memory.completedDate)
+    setStory(memory.story || '')
+    setMemoryFormError(null)
+    setIsMemoryModalOpen(true)
+  }
+
+  const handleCloseMemoryModal = () => {
+    setIsMemoryModalOpen(false)
+    setEditingMemoryId(null)
+    setSelectedDreamId('')
+    setStory('')
+    setMemoryFormError(null)
+  }
+
+  const handleOpenDeleteMemoryModal = (memory: MemoryResponse) => {
+    setDeletingMemory(memory)
+    setDeleteMemoryError(null)
+  }
+
+  const handleCloseDeleteMemoryModal = () => {
+    setDeletingMemory(null)
+    setDeleteMemoryError(null)
+  }
+
+  const handleConfirmDeleteMemory = async () => {
+    if (!deletingMemory) return
+    setIsDeletingMemory(true)
+    setDeleteMemoryError(null)
+    try {
+      await memoryApi.delete(deletingMemory.id)
+      setMemories((prev) => prev.filter((m) => m.id !== deletingMemory.id))
+      setDeletingMemory(null)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete memory reflection.'
+      setDeleteMemoryError(message)
+    } finally {
+      setIsDeletingMemory(false)
+    }
+  }
+
+  const handleSubmitMemory = async (e: React.FormEvent) => {
+    e.preventDefault()
+
+    if (!completedDate) {
+      setMemoryFormError('Please select a completion date.')
+      return
+    }
+
+    if (completedDate > todayStr) {
+      setMemoryFormError('Completion date cannot be in the future.')
+      return
+    }
+
+    setIsSubmittingMemory(true)
+    setMemoryFormError(null)
+
+    try {
+      if (memoryModalMode === 'add') {
+        if (!selectedDreamId) {
+          setMemoryFormError('Please select an eligible dream to commemorate.')
+          setIsSubmittingMemory(false)
+          return
+        }
+
+        const payload: MemoryCreateRequest = {
+          dreamId: Number(selectedDreamId),
+          completedDate,
+          story: story.trim() || undefined
+        }
+
+        const created = await memoryApi.create(payload)
+        setMemories((prev) => [created, ...prev])
+        // Reload dreams to synchronize the dream status change to Completed in the dashboard
+        await loadDreams()
+        handleCloseMemoryModal()
+      } else if (memoryModalMode === 'edit' && editingMemoryId !== null) {
+        const payload: MemoryUpdateRequest = {
+          completedDate,
+          story: story.trim() || undefined
+        }
+
+        const updated = await memoryApi.update(editingMemoryId, payload)
+        setMemories((prev) =>
+          prev.map((m) => (m.id === editingMemoryId ? updated : m))
+        )
+        handleCloseMemoryModal()
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to save memory reflection.'
+      setMemoryFormError(message)
+    } finally {
+      setIsSubmittingMemory(false)
     }
   }
 
@@ -380,21 +545,35 @@ function App() {
             <h2 className="page-title">{activeNav}</h2>
             <p className="page-subtitle">{pageSubtitles[activeNav]}</p>
           </div>
-          <button
-            type="button"
-            className="add-dream-btn"
-            onClick={handleOpenAddModal}
-          >
-            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-              <path d="M5 12h14"/>
-              <path d="M12 5v14"/>
-            </svg>
-            Add New Dream
-          </button>
+          {activeNav === 'Memory Wall' ? (
+            <button
+              type="button"
+              className="add-dream-btn"
+              onClick={() => handleOpenAddMemoryModal()}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M12 5v14"/>
+                <path d="M5 12h14"/>
+              </svg>
+              Record Memory
+            </button>
+          ) : (
+            <button
+              type="button"
+              className="add-dream-btn"
+              onClick={handleOpenAddModal}
+            >
+              <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                <path d="M5 12h14"/>
+                <path d="M12 5v14"/>
+              </svg>
+              Add New Dream
+            </button>
+          )}
         </header>
 
         {/* ------------------------------------------------------------------ */}
-        {/* ASYNC STATE 1: Loading State                                       */}
+        {/* GLOBAL ASYNC STATE 1: Dreams Loading State                         */}
         {/* ------------------------------------------------------------------ */}
         {isLoading && (
           <div className="state-card loading-state" role="status" aria-live="polite">
@@ -405,7 +584,7 @@ function App() {
         )}
 
         {/* ------------------------------------------------------------------ */}
-        {/* ASYNC STATE 2: Error State (No Silent Mock Fallback)               */}
+        {/* GLOBAL ASYNC STATE 2: Dreams Connection Error State                */}
         {/* ------------------------------------------------------------------ */}
         {!isLoading && fetchError && (
           <div className="state-card error-state" role="alert">
@@ -600,41 +779,136 @@ function App() {
             )}
 
             {/* ---------------------------------------------------------------- */}
-            {/* VIEW 3: Memory Wall (Placeholder View)                             */}
+            {/* VIEW 3: Memory Wall (Milestone Memories & Reflections)             */}
             {/* ---------------------------------------------------------------- */}
             {activeNav === 'Memory Wall' && (
-              <section className="placeholder-view" aria-label="Memory Wall Placeholder">
-                <div className="placeholder-card">
-                  <div className="placeholder-icon-wrap" aria-hidden="true">
-                    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
-                      <circle cx="9" cy="9" r="2"/>
-                      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
-                    </svg>
+              <section aria-label="Memory Wall">
+                <div className="section-top">
+                  <div>
+                    <h3 className="section-title">Milestone Reflections</h3>
+                    <p className="list-meta-text">
+                      Celebrating {memories.length} accomplished {memories.length === 1 ? 'experience' : 'experiences'}
+                    </p>
                   </div>
-
-                  <h3 className="placeholder-title">Memory Wall Coming Soon</h3>
-                  <p className="placeholder-text">
-                    This space will celebrate your accomplished dreams with photo galleries, completion stories, milestone reflections, and commemorative badges.
-                  </p>
-
-                  <div className="placeholder-preview-box">
-                    <p className="preview-label">✦ Upcoming Memory Wall Features</p>
-                    <ul className="preview-list">
-                      <li>Upload adventure photos and travel journals</li>
-                      <li>Pin reflections on what each achieved goal felt like</li>
-                      <li>Share an interactive digital memory book with friends</li>
-                    </ul>
-                  </div>
-
-                  <button
-                    type="button"
-                    className="placeholder-action-btn"
-                    onClick={() => setActiveNav('My Bucket List')}
-                  >
-                    ← Back to My Bucket List
-                  </button>
+                  {eligibleDreams.length > 0 && (
+                    <button
+                      type="button"
+                      className="text-link-btn"
+                      onClick={() => handleOpenAddMemoryModal()}
+                    >
+                      + Record Memory for Dream ({eligibleDreams.length} eligible) →
+                    </button>
+                  )}
                 </div>
+
+                {isMemoriesLoading ? (
+                  <div className="state-card loading-state" role="status" aria-live="polite">
+                    <div className="loading-spinner" aria-hidden="true" />
+                    <h3 className="state-title">Loading Memory Wall...</h3>
+                    <p className="state-text">Fetching your milestone memories and reflections from the backend.</p>
+                  </div>
+                ) : memoriesError ? (
+                  <div className="state-card error-state" role="alert">
+                    <div className="state-icon-badge error" aria-hidden="true">
+                      <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                        <circle cx="12" cy="12" r="10"/>
+                        <line x1="12" y1="8" x2="12" y2="12"/>
+                        <line x1="12" y1="16" x2="12.01" y2="16"/>
+                      </svg>
+                    </div>
+                    <h3 className="state-title">Unable to Load Memories</h3>
+                    <p className="state-text">{memoriesError}</p>
+                    <button type="button" className="btn-primary" onClick={loadMemories} style={{ marginTop: '1.25rem' }}>
+                      Retry Loading Memories
+                    </button>
+                  </div>
+                ) : memories.length === 0 ? (
+                  <div className="state-card empty-state">
+                    <div className="state-icon-badge" aria-hidden="true">✦</div>
+                    <h3 className="state-title">Your Memory Wall is Waiting</h3>
+                    <p className="state-text">
+                      No memories recorded yet. When you achieve a dream, commemorate it with the completion date and your personal reflections to celebrate making life count.
+                    </p>
+                    {eligibleDreams.length > 0 ? (
+                      <button
+                        type="button"
+                        className="btn-primary"
+                        onClick={() => handleOpenAddMemoryModal()}
+                        style={{ marginTop: '1.25rem' }}
+                      >
+                        + Record Your First Memory
+                      </button>
+                    ) : (
+                      <p className="list-meta-text" style={{ marginTop: '1.25rem' }}>
+                        Create your dreams in your bucket list first to record memories for them!
+                      </p>
+                    )}
+                  </div>
+                ) : (
+                  <div className="memories-grid">
+                    {memories.map((mem) => (
+                      <article key={mem.id} className="memory-card">
+                        <div>
+                          <div className="memory-card-header">
+                            <span className="category-tag">{mem.dreamCategory}</span>
+                            <span className="memory-date-badge">
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <circle cx="12" cy="12" r="10"/>
+                                <polyline points="12 6 12 12 16 14"/>
+                              </svg>
+                              Achieved {mem.completedDate}
+                            </span>
+                          </div>
+
+                          <h4 className="memory-title">{mem.dreamTitle}</h4>
+
+                          {mem.story ? (
+                            <div className="memory-story-box">
+                              “{mem.story}”
+                            </div>
+                          ) : (
+                            <p className="memory-story-empty">
+                              No written reflection recorded yet.
+                            </p>
+                          )}
+                        </div>
+
+                        <div className="memory-card-footer">
+                          <span className="memory-badge-label">
+                            <span>✓</span> Memory #{mem.id}
+                          </span>
+                          <div className="card-action-group">
+                            <button
+                              type="button"
+                              className="card-btn edit-btn"
+                              onClick={() => handleOpenEditMemoryModal(mem)}
+                              aria-label={`Edit memory for "${mem.dreamTitle}"`}
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5Z"/>
+                                <path d="m15 5 4 4"/>
+                              </svg>
+                              Edit
+                            </button>
+                            <button
+                              type="button"
+                              className="card-btn delete-btn"
+                              onClick={() => handleOpenDeleteMemoryModal(mem)}
+                              aria-label={`Delete memory for "${mem.dreamTitle}"`}
+                            >
+                              <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                                <path d="M3 6h18"/>
+                                <path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/>
+                                <path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/>
+                              </svg>
+                              Delete
+                            </button>
+                          </div>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </section>
             )}
           </>
@@ -828,7 +1102,7 @@ function App() {
       )}
 
       {/* -------------------------------------------------------------------- */}
-      {/* Modal: Delete Confirmation Dialog                                   */}
+      {/* Modal: Delete Confirmation Dialog for Dream                          */}
       {/* -------------------------------------------------------------------- */}
       {deletingDream && (
         <div
@@ -849,13 +1123,12 @@ function App() {
             aria-describedby="delete-dialog-desc"
             style={{ maxWidth: '460px' }}
           >
-            {/* Delete Modal Header */}
             <div className="modal-header">
               <div className="modal-title-group">
                 <div className="modal-badge-icon danger" aria-hidden="true">🗑</div>
                 <div>
                   <h3 id="delete-dialog-title" className="modal-title">Delete Dream?</h3>
-                  <p className="modal-subtitle">This will permanently remove the dream from MySQL database.</p>
+                  <p className="modal-subtitle">This will permanently remove the dream and any associated memories.</p>
                 </div>
               </div>
               <button
@@ -885,7 +1158,6 @@ function App() {
                 Are you sure you want to remove this aspiration from your bucket list? The change will be immediately reflected in your backend database and dashboard statistics.
               </p>
 
-              {/* Preview Box of the Dream to be deleted */}
               <div className="delete-preview-box">
                 <p className="delete-preview-title">{deletingDream.title}</p>
                 <div className="delete-preview-meta">
@@ -897,7 +1169,6 @@ function App() {
                 </div>
               </div>
 
-              {/* Confirmation Actions */}
               <div className="modal-actions" style={{ marginTop: 0, paddingTop: '1rem' }}>
                 <button
                   type="button"
@@ -915,6 +1186,260 @@ function App() {
                   autoFocus
                 >
                   {isDeleting ? 'Deleting...' : 'Delete Dream'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------------- */}
+      {/* Modal Dialog: Add / Edit Memory Form                                 */}
+      {/* -------------------------------------------------------------------- */}
+      {isMemoryModalOpen && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isSubmittingMemory) handleCloseMemoryModal()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && !isSubmittingMemory) handleCloseMemoryModal()
+          }}
+          role="presentation"
+        >
+          <div
+            className="modal-dialog"
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="memory-modal-title"
+          >
+            {/* Modal Header */}
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <div className="modal-badge-icon" aria-hidden="true">
+                  {memoryModalMode === 'edit' ? '✏️' : '🌟'}
+                </div>
+                <div>
+                  <h3 id="memory-modal-title" className="modal-title">
+                    {memoryModalMode === 'edit' ? 'Edit Milestone Reflection' : 'Record Milestone Memory'}
+                  </h3>
+                  <p className="modal-subtitle">
+                    {memoryModalMode === 'edit'
+                      ? 'Update your completion date and personal story on the Memory Wall.'
+                      : 'Commemorate your achieved goal. Creating a memory marks the dream as Completed.'}
+                  </p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseMemoryModal}
+                disabled={isSubmittingMemory}
+                aria-label="Close modal"
+              >
+                ✕
+              </button>
+            </div>
+
+            {/* Memory Form */}
+            <form onSubmit={handleSubmitMemory} className="modal-form" noValidate>
+              {memoryFormError && (
+                <div className="form-action-error" role="alert">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <span>{memoryFormError}</span>
+                </div>
+              )}
+
+              {/* Field 1: Linked Dream */}
+              {memoryModalMode === 'add' ? (
+                <div className="form-group">
+                  <label htmlFor="memory-dream-select" className="form-label">
+                    Accomplished Dream
+                    <span className="required-star" aria-hidden="true">*</span>
+                  </label>
+                  {eligibleDreams.length > 0 ? (
+                    <select
+                      id="memory-dream-select"
+                      className="form-select"
+                      value={selectedDreamId}
+                      onChange={(e) => setSelectedDreamId(Number(e.target.value))}
+                      autoFocus
+                    >
+                      {eligibleDreams.map((d) => (
+                        <option key={d.id} value={d.id}>
+                          {d.title} ({d.category}) — {d.status}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <p className="list-meta-text" style={{ padding: '0.5rem 0', color: '#fca5a5' }}>
+                      All existing dreams already have recorded memories! Create a new dream first.
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="form-group">
+                  <label className="form-label">
+                    Linked Dream
+                  </label>
+                  <input
+                    type="text"
+                    className="form-input"
+                    value={memories.find((m) => m.id === editingMemoryId)?.dreamTitle || ''}
+                    disabled
+                    style={{ opacity: 0.8 }}
+                  />
+                  <p className="list-meta-text">The linked dream is fixed to preserve the one-to-one milestone relationship.</p>
+                </div>
+              )}
+
+              {/* Field 2: Completion Date (Required, Past or Present) */}
+              <div className="form-group">
+                <label htmlFor="memory-date" className="form-label">
+                  Completion Date
+                  <span className="required-star" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="memory-date"
+                  type="date"
+                  className="form-input"
+                  max={todayStr}
+                  value={completedDate}
+                  onChange={(e) => setCompletedDate(e.target.value)}
+                  required
+                />
+                <p className="list-meta-text">Must be today or in the past.</p>
+              </div>
+
+              {/* Field 3: Story Reflections (Optional) */}
+              <div className="form-group">
+                <label htmlFor="memory-story" className="form-label">
+                  Personal Reflections & Story
+                  <span className="optional-badge">(Optional)</span>
+                </label>
+                <textarea
+                  id="memory-story"
+                  className="form-textarea"
+                  placeholder="What was the experience like? What emotions, hurdles, or memories stand out most?"
+                  rows={4}
+                  maxLength={4000}
+                  value={story}
+                  onChange={(e) => setStory(e.target.value)}
+                />
+              </div>
+
+              {/* Form Action Buttons */}
+              <div className="modal-actions">
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleCloseMemoryModal}
+                  disabled={isSubmittingMemory}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="btn-primary"
+                  disabled={isSubmittingMemory || (memoryModalMode === 'add' && eligibleDreams.length === 0)}
+                >
+                  {isSubmittingMemory
+                    ? memoryModalMode === 'edit' ? 'Saving Changes...' : 'Recording Memory...'
+                    : memoryModalMode === 'edit' ? 'Save Reflections' : 'Record Memory'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* -------------------------------------------------------------------- */}
+      {/* Modal: Delete Confirmation Dialog for Memory                         */}
+      {/* -------------------------------------------------------------------- */}
+      {deletingMemory && (
+        <div
+          className="modal-overlay"
+          onClick={(e) => {
+            if (e.target === e.currentTarget && !isDeletingMemory) handleCloseDeleteMemoryModal()
+          }}
+          onKeyDown={(e) => {
+            if (e.key === 'Escape' && !isDeletingMemory) handleCloseDeleteMemoryModal()
+          }}
+          role="presentation"
+        >
+          <div
+            className="modal-dialog"
+            role="alertdialog"
+            aria-modal="true"
+            aria-labelledby="delete-memory-dialog-title"
+            aria-describedby="delete-memory-dialog-desc"
+            style={{ maxWidth: '460px' }}
+          >
+            <div className="modal-header">
+              <div className="modal-title-group">
+                <div className="modal-badge-icon danger" aria-hidden="true">🗑</div>
+                <div>
+                  <h3 id="delete-memory-dialog-title" className="modal-title">Delete Memory Reflection?</h3>
+                  <p className="modal-subtitle">Remove this reflection from your Memory Wall.</p>
+                </div>
+              </div>
+              <button
+                type="button"
+                className="modal-close-btn"
+                onClick={handleCloseDeleteMemoryModal}
+                disabled={isDeletingMemory}
+                aria-label="Close delete confirmation"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div style={{ padding: '1.5rem 1.75rem' }}>
+              {deleteMemoryError && (
+                <div className="form-action-error" role="alert">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <span>{deleteMemoryError}</span>
+                </div>
+              )}
+
+              <p id="delete-memory-dialog-desc" style={{ margin: 0, fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                Are you sure you want to remove this reflection? Your underlying Dream (<strong>{deletingMemory.dreamTitle}</strong>) will remain marked as <strong>Completed</strong> in your bucket list.
+              </p>
+
+              <div className="delete-preview-box">
+                <p className="delete-preview-title">{deletingMemory.dreamTitle}</p>
+                <div className="delete-preview-meta">
+                  <span>{deletingMemory.dreamCategory}</span>
+                  <span>•</span>
+                  <span>Achieved {deletingMemory.completedDate}</span>
+                </div>
+              </div>
+
+              <div className="modal-actions" style={{ marginTop: 0, paddingTop: '1rem' }}>
+                <button
+                  type="button"
+                  className="btn-secondary"
+                  onClick={handleCloseDeleteMemoryModal}
+                  disabled={isDeletingMemory}
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  className="btn-danger"
+                  onClick={handleConfirmDeleteMemory}
+                  disabled={isDeletingMemory}
+                  autoFocus
+                >
+                  {isDeletingMemory ? 'Deleting...' : 'Delete Memory'}
                 </button>
               </div>
             </div>
