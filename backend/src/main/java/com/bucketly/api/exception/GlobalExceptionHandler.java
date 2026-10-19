@@ -1,5 +1,6 @@
 package com.bucketly.api.exception;
 
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.validation.FieldError;
@@ -38,5 +39,42 @@ public class GlobalExceptionHandler {
         error.put("validationErrors", fieldErrors);
         return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
     }
-}
 
+    @ExceptionHandler(DuplicateResourceException.class)
+    public ResponseEntity<Map<String, Object>> handleDuplicateResource(DuplicateResourceException ex) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("timestamp", LocalDateTime.now());
+        error.put("status", HttpStatus.CONFLICT.value());
+        error.put("error", "Conflict");
+        error.put("message", ex.getMessage());
+        return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+    }
+
+    @ExceptionHandler(DataIntegrityViolationException.class)
+    public ResponseEntity<Map<String, Object>> handleDataIntegrityViolation(DataIntegrityViolationException ex) {
+        Map<String, Object> error = new HashMap<>();
+        error.put("timestamp", LocalDateTime.now());
+
+        String causeMessage = (ex.getRootCause() != null && ex.getRootCause().getMessage() != null)
+                ? ex.getRootCause().getMessage().toLowerCase()
+                : (ex.getMessage() != null ? ex.getMessage().toLowerCase() : "");
+
+        boolean isUniqueOrDuplicate = causeMessage.contains("duplicate")
+                || causeMessage.contains("unique")
+                || causeMessage.contains("uk_memories_dream_id")
+                || (ex.getCause() != null && ex.getCause().getClass().getName().contains("ConstraintViolationException"));
+
+        if (isUniqueOrDuplicate) {
+            error.put("status", HttpStatus.CONFLICT.value());
+            error.put("error", "Conflict");
+            error.put("message", "A record with this unique identifier or relationship already exists.");
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(error);
+        }
+
+        // Other database integrity violations return 400 Bad Request
+        error.put("status", HttpStatus.BAD_REQUEST.value());
+        error.put("error", "Bad Request");
+        error.put("message", "Database integrity constraint violation.");
+        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(error);
+    }
+}
