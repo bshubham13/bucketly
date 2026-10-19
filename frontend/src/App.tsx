@@ -1,8 +1,9 @@
-import { useState } from 'react'
+import { useState, useEffect } from 'react'
 import './App.css'
+import { dreamApi, type DreamRequest, type DreamResponse } from './services/dreamService'
 
 // Simple, beginner-friendly TypeScript type representing one bucket list goal
-interface DreamItem {
+export interface DreamItem {
   id: number
   title: string
   category: string
@@ -12,45 +13,31 @@ interface DreamItem {
   description: string
 }
 
-// Initial sample data for the personal bucket list
-const INITIAL_DREAMS: DreamItem[] = [
-  {
-    id: 1,
-    title: 'Witness the Northern Lights in Tromsø',
-    category: 'Travel & Nature',
-    status: 'In Progress',
-    progress: 65,
-    targetDate: 'Winter 2026',
-    description: 'Rent a glass igloo in Norway, chase the Aurora Borealis, and photograph the midnight sky.'
-  },
-  {
-    id: 2,
-    title: 'Ship Bucketly Full-Stack Portfolio',
-    category: 'Career & Tech',
-    status: 'In Progress',
-    progress: 40,
-    targetDate: 'Q2 2026',
-    description: 'Design and deploy a full-stack personal app with React, TypeScript, Spring Boot, and MySQL.'
-  },
-  {
-    id: 3,
-    title: 'Run the Tokyo Marathon',
-    category: 'Fitness & Health',
-    status: 'Not Started',
-    progress: 10,
-    targetDate: 'Spring 2027',
-    description: 'Build up 42.2km endurance, qualify for the Abbott World Marathon Majors lottery.'
-  },
-  {
-    id: 4,
-    title: 'Stargazing Camp in the Sahara Desert',
-    category: 'Adventure',
-    status: 'Completed',
-    progress: 100,
-    targetDate: 'Achieved Oct 2025',
-    description: 'Slept under the unfiltered Milky Way in Merzouga dunes with Berber guides.'
+// Convert backend DreamResponse DTO to UI DreamItem with calculated progress
+function toDreamItem(dto: DreamResponse): DreamItem {
+  let progress = 0
+  const normalizedStatus = (['In Progress', 'Completed', 'Not Started'].includes(dto.status)
+    ? dto.status
+    : 'Not Started') as 'In Progress' | 'Completed' | 'Not Started'
+
+  if (normalizedStatus === 'Completed') {
+    progress = 100
+  } else if (normalizedStatus === 'In Progress') {
+    progress = 40
+  } else {
+    progress = 0
   }
-]
+
+  return {
+    id: dto.id,
+    title: dto.title,
+    category: dto.category,
+    status: normalizedStatus,
+    progress,
+    targetDate: dto.targetDate || 'Flexible Target',
+    description: dto.description || 'No description provided yet.'
+  }
+}
 
 // Reusable Dream Card component to keep the code clean and avoid duplication
 function DreamCard({
@@ -135,8 +122,10 @@ function App() {
   // Navigation tab state: 'Dashboard' | 'My Bucket List' | 'Memory Wall'
   const [activeNav, setActiveNav] = useState<'Dashboard' | 'My Bucket List' | 'Memory Wall'>('Dashboard')
 
-  // Main state holding the list of dreams (initialized with our sample data)
-  const [dreams, setDreams] = useState<DreamItem[]>(INITIAL_DREAMS)
+  // Main state holding the list of dreams (backend is the single source of truth)
+  const [dreams, setDreams] = useState<DreamItem[]>([])
+  const [isLoading, setIsLoading] = useState<boolean>(true)
+  const [fetchError, setFetchError] = useState<string | null>(null)
 
   // Filter state for dream cards on the My Bucket List page
   const [activeFilter, setActiveFilter] = useState<'All' | 'In Progress' | 'Completed' | 'Not Started'>('All')
@@ -145,9 +134,13 @@ function App() {
   const [isModalOpen, setIsModalOpen] = useState(false)
   const [modalMode, setModalMode] = useState<'add' | 'edit'>('add')
   const [editingDreamId, setEditingDreamId] = useState<number | null>(null)
+  const [actionError, setActionError] = useState<string | null>(null)
+  const [isSubmitting, setIsSubmitting] = useState(false)
 
   // Delete confirmation modal state
   const [deletingDream, setDeletingDream] = useState<DreamItem | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
+  const [isDeleting, setIsDeleting] = useState(false)
 
   // Form input states
   const [title, setTitle] = useState('')
@@ -156,6 +149,26 @@ function App() {
   const [targetDate, setTargetDate] = useState('')
   const [status, setStatus] = useState<'Not Started' | 'In Progress' | 'Completed'>('Not Started')
   const [titleError, setTitleError] = useState('')
+
+  // Load dreams from backend API on initial mount
+  const loadDreams = async () => {
+    setIsLoading(true)
+    setFetchError(null)
+    try {
+      const data = await dreamApi.getAll()
+      setDreams(data.map(toDreamItem))
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Unable to connect to Bucketly API. Ensure backend is running on http://localhost:8080.'
+      setFetchError(message)
+      setDreams([]) // Never silently fall back to mock data
+    } finally {
+      setIsLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadDreams()
+  }, [])
 
   // Filter items based on activeFilter selection
   const filteredDreams = dreams.filter((dream) => {
@@ -186,6 +199,7 @@ function App() {
     setTargetDate('')
     setStatus('Not Started')
     setTitleError('')
+    setActionError(null)
     setIsModalOpen(true)
   }
 
@@ -199,6 +213,7 @@ function App() {
     setTargetDate(dream.targetDate === 'Flexible Target' ? '' : dream.targetDate)
     setStatus(dream.status)
     setTitleError('')
+    setActionError(null)
     setIsModalOpen(true)
   }
 
@@ -207,23 +222,40 @@ function App() {
     setIsModalOpen(false)
     setEditingDreamId(null)
     setTitleError('')
+    setActionError(null)
   }
 
   // Open delete confirmation modal
   const handleOpenDeleteModal = (dream: DreamItem) => {
     setDeletingDream(dream)
+    setDeleteError(null)
   }
 
-  // Confirm delete and remove the dream from state
-  const handleConfirmDelete = () => {
-    if (deletingDream) {
+  // Close delete confirmation modal
+  const handleCloseDeleteModal = () => {
+    setDeletingDream(null)
+    setDeleteError(null)
+  }
+
+  // Confirm delete and remove the dream from state via DELETE /api/dreams/{id}
+  const handleConfirmDelete = async () => {
+    if (!deletingDream) return
+    setIsDeleting(true)
+    setDeleteError(null)
+    try {
+      await dreamApi.delete(deletingDream.id)
       setDreams((prev) => prev.filter((d) => d.id !== deletingDream.id))
       setDeletingDream(null)
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to delete dream. Please check backend connection.'
+      setDeleteError(message)
+    } finally {
+      setIsDeleting(false)
     }
   }
 
-  // Handle form submission for both Add and Edit modes
-  const handleSubmit = (e: React.FormEvent) => {
+  // Handle form submission for both Add (POST) and Edit (PUT) modes
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
 
     // Validate required title
@@ -232,52 +264,37 @@ function App() {
       return
     }
 
-    if (modalMode === 'add') {
-      let initialProgress = 0
-      if (status === 'In Progress') initialProgress = 20
-      if (status === 'Completed') initialProgress = 100
+    setIsSubmitting(true)
+    setActionError(null)
 
-      const newDream: DreamItem = {
-        id: Date.now(),
-        title: title.trim(),
-        category,
-        status,
-        progress: initialProgress,
-        targetDate: targetDate.trim() || 'Flexible Target',
-        description: description.trim() || 'No description provided yet.'
-      }
-
-      // Prepend the new dream so it appears first in the list
-      setDreams((prev) => [newDream, ...prev])
-    } else if (modalMode === 'edit' && editingDreamId !== null) {
-      // Update existing dream while keeping its stable ID and consistent progress
-      setDreams((prev) =>
-        prev.map((d) => {
-          if (d.id !== editingDreamId) return d
-
-          let updatedProgress = d.progress
-          if (status === 'Completed') {
-            updatedProgress = 100
-          } else if (status === 'Not Started') {
-            updatedProgress = 0
-          } else if (status === 'In Progress' && updatedProgress === 0) {
-            updatedProgress = 20
-          }
-
-          return {
-            ...d,
-            title: title.trim(),
-            category,
-            status,
-            progress: updatedProgress,
-            targetDate: targetDate.trim() || 'Flexible Target',
-            description: description.trim() || 'No description provided yet.'
-          }
-        })
-      )
+    const payload: DreamRequest = {
+      title: title.trim(),
+      category,
+      status,
+      targetDate: targetDate.trim() || undefined,
+      description: description.trim() || undefined
     }
 
-    handleCloseModal()
+    try {
+      if (modalMode === 'add') {
+        const created = await dreamApi.create(payload)
+        const newDream = toDreamItem(created)
+        setDreams((prev) => [newDream, ...prev])
+        handleCloseModal()
+      } else if (modalMode === 'edit' && editingDreamId !== null) {
+        const updated = await dreamApi.update(editingDreamId, payload)
+        const updatedDream = toDreamItem(updated)
+        setDreams((prev) =>
+          prev.map((d) => (d.id === editingDreamId ? updatedDream : d))
+        )
+        handleCloseModal()
+      }
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Operation failed. Please check backend connection.'
+      setActionError(message)
+    } finally {
+      setIsSubmitting(false)
+    }
   }
 
   return (
@@ -321,7 +338,8 @@ function App() {
             >
               <span className="nav-icon" aria-hidden="true">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="m19 21-7-4-7 4V5a2 2 0 0 1 2-2h10a2 2 0 0 1 2 2v16z"/>
+                  <path d="m9 11 3 3L22 4"/>
+                  <path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/>
                 </svg>
               </span>
               My Bucket List
@@ -334,9 +352,7 @@ function App() {
             >
               <span className="nav-icon" aria-hidden="true">
                 <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
-                  <circle cx="9" cy="9" r="2"/>
-                  <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                  <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z"/>
                 </svg>
               </span>
               Memory Wall
@@ -378,190 +394,264 @@ function App() {
         </header>
 
         {/* ------------------------------------------------------------------ */}
-        {/* VIEW 1: Dashboard                                                  */}
+        {/* ASYNC STATE 1: Loading State                                       */}
         {/* ------------------------------------------------------------------ */}
-        {activeNav === 'Dashboard' && (
-          <>
-            {/* Hero Inspiration Banner */}
-            <section className="hero-banner" aria-label="Inspiration of the day">
-              <span className="hero-tag">🌟 Life Philosophy</span>
-              <blockquote className="hero-quote">
-                “The purpose of life is to live it, to taste experience to the utmost, to reach out eagerly and without fear for newer and richer experience.”
-              </blockquote>
-              <p className="hero-author">— Eleanor Roosevelt</p>
-            </section>
-
-            {/* Overview Statistics Grid */}
-            <section className="stats-grid" aria-label="Overview Statistics">
-              <div className="stat-card">
-                <div className="stat-header">
-                  <span className="stat-label">Total Dreams</span>
-                  <span className="stat-icon-pill" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc' }} aria-hidden="true">✦</span>
-                </div>
-                <p className="stat-value">{totalCount}</p>
-                <p className="stat-caption">Lifelong aspirations registered</p>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-header">
-                  <span className="stat-label">In Progress</span>
-                  <span className="stat-icon-pill" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }} aria-hidden="true">⚡</span>
-                </div>
-                <p className="stat-value">{inProgressCount}</p>
-                <p className="stat-caption">Actively being pursued right now</p>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-header">
-                  <span className="stat-label">Accomplished</span>
-                  <span className="stat-icon-pill" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }} aria-hidden="true">✓</span>
-                </div>
-                <p className="stat-value">{completedCount}</p>
-                <p className="stat-caption">Memories etched in stone</p>
-              </div>
-
-              <div className="stat-card">
-                <div className="stat-header">
-                  <span className="stat-label">Next Target Year</span>
-                  <span className="stat-icon-pill" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }} aria-hidden="true">🎯</span>
-                </div>
-                <p className="stat-value">2026</p>
-                <p className="stat-caption">Tromsø & Portfolio milestones</p>
-              </div>
-            </section>
-
-            {/* In-Progress Milestones Spotlight */}
-            <section aria-label="Active Focus Milestones">
-              <div className="section-top">
-                <div>
-                  <h3 className="section-title">Active Milestones</h3>
-                  <p className="list-meta-text">Goals currently being pursued right now ({inProgressDreams.length})</p>
-                </div>
-                <button
-                  type="button"
-                  className="text-link-btn"
-                  onClick={() => setActiveNav('My Bucket List')}
-                >
-                  View Full Bucket List ({totalCount}) →
-                </button>
-              </div>
-
-              <div className="dreams-grid">
-                {inProgressDreams.map((dream) => (
-                  <DreamCard
-                    key={dream.id}
-                    dream={dream}
-                    onEdit={handleOpenEditModal}
-                    onDelete={handleOpenDeleteModal}
-                  />
-                ))}
-              </div>
-            </section>
-          </>
+        {isLoading && (
+          <div className="state-card loading-state" role="status" aria-live="polite">
+            <div className="loading-spinner" aria-hidden="true" />
+            <h3 className="state-title">Connecting to Bucketly API...</h3>
+            <p className="state-text">Loading your life milestones and bucket list from the backend server.</p>
+          </div>
         )}
 
         {/* ------------------------------------------------------------------ */}
-        {/* VIEW 2: My Bucket List (Dedicated Exploration & Filter View)      */}
+        {/* ASYNC STATE 2: Error State (No Silent Mock Fallback)               */}
         {/* ------------------------------------------------------------------ */}
-        {activeNav === 'My Bucket List' && (
-          <section aria-label="My Complete Bucket List">
-            <div className="section-top">
-              <div>
-                <h3 className="section-title">All Aspirations</h3>
-                <p className="list-meta-text">Showing {filteredDreams.length} of {totalCount} dreams</p>
-              </div>
-
-              <div className="filters-wrapper" role="group" aria-label="Filter aspirations by status">
-                {(['All', 'In Progress', 'Completed', 'Not Started'] as const).map((filterName) => (
-                  <button
-                    key={filterName}
-                    type="button"
-                    className={`filter-chip ${activeFilter === filterName ? 'active' : ''}`}
-                    onClick={() => setActiveFilter(filterName)}
-                  >
-                    {filterName}
-                  </button>
-                ))}
-              </div>
+        {!isLoading && fetchError && (
+          <div className="state-card error-state" role="alert">
+            <div className="state-icon-badge error" aria-hidden="true">
+              <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <circle cx="12" cy="12" r="10"/>
+                <line x1="12" y1="8" x2="12" y2="12"/>
+                <line x1="12" y1="16" x2="12.01" y2="16"/>
+              </svg>
             </div>
+            <h3 className="state-title">Backend Connection Failed</h3>
+            <p className="state-text">{fetchError}</p>
+            <button type="button" className="btn-primary" onClick={loadDreams} style={{ marginTop: '1.25rem' }}>
+              <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true" style={{ marginRight: '0.4rem', verticalAlign: 'middle' }}>
+                <path d="M21 2v6h-6"/>
+                <path d="M3 12a9 9 0 0 1 15-6.7L21 8"/>
+                <path d="M3 22v-6h6"/>
+                <path d="M21 12a9 9 0 0 1-15 6.7L3 16"/>
+              </svg>
+              Retry Connection
+            </button>
+          </div>
+        )}
 
-            <div className="dreams-grid">
-              {filteredDreams.length > 0 ? (
-                filteredDreams.map((dream) => (
-                  <DreamCard
-                    key={dream.id}
-                    dream={dream}
-                    onEdit={handleOpenEditModal}
-                    onDelete={handleOpenDeleteModal}
-                  />
-                ))
-              ) : (
-                <div className="empty-filter-state">
-                  <p className="empty-state-title">No dreams found</p>
-                  <p className="empty-state-text">No aspirations currently match the "{activeFilter}" filter.</p>
+        {/* ------------------------------------------------------------------ */}
+        {/* NORMAL VIEWS (Rendered when not loading and no fetchError)          */}
+        {/* ------------------------------------------------------------------ */}
+        {!isLoading && !fetchError && (
+          <>
+            {/* ---------------------------------------------------------------- */}
+            {/* VIEW 1: Dashboard                                                */}
+            {/* ---------------------------------------------------------------- */}
+            {activeNav === 'Dashboard' && (
+              <>
+                {/* Hero Inspiration Banner */}
+                <section className="hero-banner" aria-label="Inspiration of the day">
+                  <span className="hero-tag">🌟 Life Philosophy</span>
+                  <blockquote className="hero-quote">
+                    “The purpose of life is to live it, to taste experience to the utmost, to reach out eagerly and without fear for newer and richer experience.”
+                  </blockquote>
+                  <p className="hero-author">— Eleanor Roosevelt</p>
+                </section>
+
+                {/* Overview Statistics Grid */}
+                <section className="stats-grid" aria-label="Overview Statistics">
+                  <div className="stat-card">
+                    <div className="stat-header">
+                      <span className="stat-label">Total Dreams</span>
+                      <span className="stat-icon-pill" style={{ background: 'rgba(168, 85, 247, 0.15)', color: '#c084fc' }} aria-hidden="true">✦</span>
+                    </div>
+                    <p className="stat-value">{totalCount}</p>
+                    <p className="stat-caption">Lifelong aspirations registered</p>
+                  </div>
+
+                  <div className="stat-card">
+                    <div className="stat-header">
+                      <span className="stat-label">In Progress</span>
+                      <span className="stat-icon-pill" style={{ background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8' }} aria-hidden="true">⚡</span>
+                    </div>
+                    <p className="stat-value">{inProgressCount}</p>
+                    <p className="stat-caption">Actively being pursued right now</p>
+                  </div>
+
+                  <div className="stat-card">
+                    <div className="stat-header">
+                      <span className="stat-label">Accomplished</span>
+                      <span className="stat-icon-pill" style={{ background: 'rgba(16, 185, 129, 0.15)', color: '#34d399' }} aria-hidden="true">✓</span>
+                    </div>
+                    <p className="stat-value">{completedCount}</p>
+                    <p className="stat-caption">Memories etched in stone</p>
+                  </div>
+
+                  <div className="stat-card">
+                    <div className="stat-header">
+                      <span className="stat-label">Completion Rate</span>
+                      <span className="stat-icon-pill" style={{ background: 'rgba(245, 158, 11, 0.15)', color: '#fbbf24' }} aria-hidden="true">🎯</span>
+                    </div>
+                    <p className="stat-value">{totalCount > 0 ? `${Math.round((completedCount / totalCount) * 100)}%` : '0%'}</p>
+                    <p className="stat-caption">Overall journey progression</p>
+                  </div>
+                </section>
+
+                {/* In-Progress Milestones Spotlight */}
+                <section aria-label="Active Focus Milestones">
+                  <div className="section-top">
+                    <div>
+                      <h3 className="section-title">Active Milestones</h3>
+                      <p className="list-meta-text">Goals currently being pursued right now ({inProgressDreams.length})</p>
+                    </div>
+                    <button
+                      type="button"
+                      className="text-link-btn"
+                      onClick={() => setActiveNav('My Bucket List')}
+                    >
+                      View Full Bucket List ({totalCount}) →
+                    </button>
+                  </div>
+
+                  {dreams.length === 0 ? (
+                    <div className="state-card empty-state">
+                      <div className="state-icon-badge" aria-hidden="true">✦</div>
+                      <h3 className="state-title">Your Bucket List is Empty</h3>
+                      <p className="state-text">No aspirations recorded yet. Start by adding your first dream to track your life journey!</p>
+                      <button type="button" className="btn-primary" onClick={handleOpenAddModal} style={{ marginTop: '1.25rem' }}>
+                        + Add Your First Dream
+                      </button>
+                    </div>
+                  ) : inProgressDreams.length === 0 ? (
+                    <div className="state-card empty-state-compact">
+                      <h4 className="state-title" style={{ fontSize: '1.05rem' }}>No Active Milestones In Progress</h4>
+                      <p className="state-text">You have no dreams currently marked as "In Progress". Pick an existing aspiration or add a new one.</p>
+                      <button type="button" className="text-link-btn" onClick={() => setActiveNav('My Bucket List')} style={{ marginTop: '0.75rem' }}>
+                        Browse all dreams to get started →
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="dreams-grid">
+                      {inProgressDreams.map((dream) => (
+                        <DreamCard
+                          key={dream.id}
+                          dream={dream}
+                          onEdit={handleOpenEditModal}
+                          onDelete={handleOpenDeleteModal}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </section>
+              </>
+            )}
+
+            {/* ---------------------------------------------------------------- */}
+            {/* VIEW 2: My Bucket List (Dedicated Exploration & Filter View)      */}
+            {/* ---------------------------------------------------------------- */}
+            {activeNav === 'My Bucket List' && (
+              <section aria-label="My Complete Bucket List">
+                <div className="section-top">
+                  <div>
+                    <h3 className="section-title">All Aspirations</h3>
+                    <p className="list-meta-text">Showing {filteredDreams.length} of {totalCount} dreams</p>
+                  </div>
+
+                  <div className="filters-wrapper" role="group" aria-label="Filter aspirations by status">
+                    {(['All', 'In Progress', 'Completed', 'Not Started'] as const).map((filterName) => (
+                      <button
+                        key={filterName}
+                        type="button"
+                        className={`filter-chip ${activeFilter === filterName ? 'active' : ''}`}
+                        onClick={() => setActiveFilter(filterName)}
+                      >
+                        {filterName}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {dreams.length === 0 ? (
+                  <div className="state-card empty-state">
+                    <div className="state-icon-badge" aria-hidden="true">✦</div>
+                    <h3 className="state-title">No Dreams in Your Bucket List</h3>
+                    <p className="state-text">Your list is currently empty. Click the button below to add your first goal!</p>
+                    <button type="button" className="btn-primary" onClick={handleOpenAddModal} style={{ marginTop: '1.25rem' }}>
+                      + Add Your First Dream
+                    </button>
+                  </div>
+                ) : filteredDreams.length > 0 ? (
+                  <div className="dreams-grid">
+                    {filteredDreams.map((dream) => (
+                      <DreamCard
+                        key={dream.id}
+                        dream={dream}
+                        onEdit={handleOpenEditModal}
+                        onDelete={handleOpenDeleteModal}
+                      />
+                    ))}
+                  </div>
+                ) : (
+                  <div className="empty-filter-state">
+                    <p className="empty-state-title">No dreams found</p>
+                    <p className="empty-state-text">No aspirations currently match the "{activeFilter}" filter.</p>
+                    <button
+                      type="button"
+                      className="placeholder-action-btn"
+                      style={{ marginTop: '1rem' }}
+                      onClick={() => setActiveFilter('All')}
+                    >
+                      Reset Filter to All
+                    </button>
+                  </div>
+                )}
+              </section>
+            )}
+
+            {/* ---------------------------------------------------------------- */}
+            {/* VIEW 3: Memory Wall (Placeholder View)                             */}
+            {/* ---------------------------------------------------------------- */}
+            {activeNav === 'Memory Wall' && (
+              <section className="placeholder-view" aria-label="Memory Wall Placeholder">
+                <div className="placeholder-card">
+                  <div className="placeholder-icon-wrap" aria-hidden="true">
+                    <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                      <rect width="18" height="18" x="3" y="3" rx="2" ry="2"/>
+                      <circle cx="9" cy="9" r="2"/>
+                      <path d="m21 15-3.086-3.086a2 2 0 0 0-2.828 0L6 21"/>
+                    </svg>
+                  </div>
+
+                  <h3 className="placeholder-title">Memory Wall Coming Soon</h3>
+                  <p className="placeholder-text">
+                    This space will celebrate your accomplished dreams with photo galleries, completion stories, milestone reflections, and commemorative badges.
+                  </p>
+
+                  <div className="placeholder-preview-box">
+                    <p className="preview-label">✦ Upcoming Memory Wall Features</p>
+                    <ul className="preview-list">
+                      <li>Upload adventure photos and travel journals</li>
+                      <li>Pin reflections on what each achieved goal felt like</li>
+                      <li>Share an interactive digital memory book with friends</li>
+                    </ul>
+                  </div>
+
                   <button
                     type="button"
                     className="placeholder-action-btn"
-                    style={{ marginTop: '1rem' }}
-                    onClick={() => setActiveFilter('All')}
+                    onClick={() => setActiveNav('My Bucket List')}
                   >
-                    Reset Filter to All
+                    ← Back to My Bucket List
                   </button>
                 </div>
-              )}
-            </div>
-          </section>
-        )}
-
-        {/* ------------------------------------------------------------------ */}
-        {/* VIEW 3: Memory Wall (Placeholder View)                             */}
-        {/* ------------------------------------------------------------------ */}
-        {activeNav === 'Memory Wall' && (
-          <section className="placeholder-view" aria-label="Memory Wall Placeholder">
-            <div className="placeholder-card">
-              <div className="placeholder-icon-wrap" aria-hidden="true">
-                <svg width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                  <path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/>
-                  <circle cx="12" cy="13" r="3"/>
-                </svg>
-              </div>
-
-              <h3 className="placeholder-title">Memory Wall Coming Soon</h3>
-              <p className="placeholder-text">
-                This space is reserved for celebrating completed experiences. Once you mark a bucket list dream as finished, you will be able to attach photos, reflections, and dates here to preserve the milestone forever.
-              </p>
-
-              <div className="placeholder-preview-box">
-                <p className="placeholder-preview-title">First Completed Memory Ready</p>
-                <p className="placeholder-preview-item">
-                  <span style={{ color: 'var(--accent-emerald)', fontWeight: 'bold' }}>✓</span>
-                  Stargazing Camp in the Sahara Desert (Achieved Oct 2025)
-                </p>
-              </div>
-
-              <button
-                type="button"
-                className="placeholder-action-btn"
-                onClick={() => setActiveNav('My Bucket List')}
-              >
-                Explore My Bucket List
-              </button>
-            </div>
-          </section>
+              </section>
+            )}
+          </>
         )}
       </main>
 
       {/* -------------------------------------------------------------------- */}
-      {/* Modal: Add / Edit Dream Form (Reused Modal Component)                */}
+      {/* Modal Dialog: Add / Edit Dream Form                                  */}
       {/* -------------------------------------------------------------------- */}
       {isModalOpen && (
         <div
           className="modal-overlay"
           onClick={(e) => {
-            if (e.target === e.currentTarget) handleCloseModal()
+            if (e.target === e.currentTarget && !isSubmitting) handleCloseModal()
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') handleCloseModal()
+            if (e.key === 'Escape' && !isSubmitting) handleCloseModal()
           }}
           role="presentation"
         >
@@ -575,7 +665,7 @@ function App() {
             <div className="modal-header">
               <div className="modal-title-group">
                 <div className="modal-badge-icon" aria-hidden="true">
-                  {modalMode === 'edit' ? '✎' : '✦'}
+                  {modalMode === 'edit' ? '✏️' : '✦'}
                 </div>
                 <div>
                   <h3 id="modal-title" className="modal-title">
@@ -583,8 +673,8 @@ function App() {
                   </h3>
                   <p className="modal-subtitle">
                     {modalMode === 'edit'
-                      ? 'Update your aspiration details and current progress.'
-                      : 'Make Life Count — What aspiration will you chase?'}
+                      ? 'Update your aspiration details and synchronize with the backend.'
+                      : 'Capture a lifelong goal and start making life count.'}
                   </p>
                 </div>
               </div>
@@ -592,7 +682,8 @@ function App() {
                 type="button"
                 className="modal-close-btn"
                 onClick={handleCloseModal}
-                aria-label="Close dialog"
+                disabled={isSubmitting}
+                aria-label="Close modal"
               >
                 ✕
               </button>
@@ -600,35 +691,47 @@ function App() {
 
             {/* Modal Form */}
             <form onSubmit={handleSubmit} className="modal-form" noValidate>
+              {actionError && (
+                <div className="form-action-error" role="alert">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <span>{actionError}</span>
+                </div>
+              )}
+
               {/* Field 1: Title (Required) */}
               <div className="form-group">
                 <label htmlFor="dream-title" className="form-label">
                   Dream Title
-                  <span className="required-badge">* Required</span>
+                  <span className="required-star" aria-hidden="true">*</span>
                 </label>
                 <input
                   id="dream-title"
                   type="text"
-                  className={`form-input ${titleError ? 'input-error' : ''}`}
+                  className={`form-input ${titleError ? 'has-error' : ''}`}
                   placeholder="e.g. Scuba dive the Great Barrier Reef"
                   value={title}
                   onChange={(e) => {
                     setTitle(e.target.value)
                     if (titleError) setTitleError('')
                   }}
-                  autoFocus
-                  aria-invalid={!!titleError}
+                  aria-invalid={titleError ? 'true' : 'false'}
                   aria-describedby={titleError ? 'title-error-msg' : undefined}
+                  autoFocus
                 />
                 {titleError && (
-                  <p id="title-error-msg" className="error-message" role="alert">
-                    <span>⚠</span> {titleError}
+                  <p id="title-error-msg" className="form-error-msg" role="alert">
+                    {titleError}
                   </p>
                 )}
               </div>
 
-              {/* Field 2 & 3: Category & Status */}
+              {/* Form Row: Category & Status */}
               <div className="form-row">
+                {/* Field 2: Category (Select) */}
                 <div className="form-group">
                   <label htmlFor="dream-category" className="form-label">
                     Category
@@ -640,14 +743,16 @@ function App() {
                     onChange={(e) => setCategory(e.target.value)}
                   >
                     <option value="Travel & Nature">Travel & Nature</option>
-                    <option value="Fitness & Health">Fitness & Health</option>
                     <option value="Career & Tech">Career & Tech</option>
-                    <option value="Personal Growth">Personal Growth</option>
+                    <option value="Fitness & Health">Fitness & Health</option>
                     <option value="Adventure">Adventure</option>
+                    <option value="Personal Growth">Personal Growth</option>
+                    <option value="Creativity & Arts">Creativity & Arts</option>
                     <option value="Other">Other</option>
                   </select>
                 </div>
 
+                {/* Field 3: Status (Select) */}
                 <div className="form-group">
                   <label htmlFor="dream-status" className="form-label">
                     Status
@@ -703,14 +808,18 @@ function App() {
                   type="button"
                   className="btn-secondary"
                   onClick={handleCloseModal}
+                  disabled={isSubmitting}
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="btn-primary"
+                  disabled={isSubmitting}
                 >
-                  {modalMode === 'edit' ? 'Save Changes' : 'Add to Bucket List'}
+                  {isSubmitting
+                    ? modalMode === 'edit' ? 'Saving Changes...' : 'Adding Dream...'
+                    : modalMode === 'edit' ? 'Save Changes' : 'Add to Bucket List'}
                 </button>
               </div>
             </form>
@@ -725,10 +834,10 @@ function App() {
         <div
           className="modal-overlay"
           onClick={(e) => {
-            if (e.target === e.currentTarget) setDeletingDream(null)
+            if (e.target === e.currentTarget && !isDeleting) handleCloseDeleteModal()
           }}
           onKeyDown={(e) => {
-            if (e.key === 'Escape') setDeletingDream(null)
+            if (e.key === 'Escape' && !isDeleting) handleCloseDeleteModal()
           }}
           role="presentation"
         >
@@ -746,13 +855,14 @@ function App() {
                 <div className="modal-badge-icon danger" aria-hidden="true">🗑</div>
                 <div>
                   <h3 id="delete-dialog-title" className="modal-title">Delete Dream?</h3>
-                  <p className="modal-subtitle">This action cannot be undone.</p>
+                  <p className="modal-subtitle">This will permanently remove the dream from MySQL database.</p>
                 </div>
               </div>
               <button
                 type="button"
                 className="modal-close-btn"
-                onClick={() => setDeletingDream(null)}
+                onClick={handleCloseDeleteModal}
+                disabled={isDeleting}
                 aria-label="Close delete confirmation"
               >
                 ✕
@@ -760,8 +870,19 @@ function App() {
             </div>
 
             <div style={{ padding: '1.5rem 1.75rem' }}>
+              {deleteError && (
+                <div className="form-action-error" role="alert">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <span>{deleteError}</span>
+                </div>
+              )}
+
               <p id="delete-dialog-desc" style={{ margin: 0, fontSize: '0.92rem', color: 'var(--text-secondary)', lineHeight: 1.5 }}>
-                Are you sure you want to remove this aspiration from your bucket list? Your dashboard statistics will be updated immediately.
+                Are you sure you want to remove this aspiration from your bucket list? The change will be immediately reflected in your backend database and dashboard statistics.
               </p>
 
               {/* Preview Box of the Dream to be deleted */}
@@ -781,7 +902,8 @@ function App() {
                 <button
                   type="button"
                   className="btn-secondary"
-                  onClick={() => setDeletingDream(null)}
+                  onClick={handleCloseDeleteModal}
+                  disabled={isDeleting}
                 >
                   Cancel
                 </button>
@@ -789,9 +911,10 @@ function App() {
                   type="button"
                   className="btn-danger"
                   onClick={handleConfirmDelete}
+                  disabled={isDeleting}
                   autoFocus
                 >
-                  Delete Dream
+                  {isDeleting ? 'Deleting...' : 'Delete Dream'}
                 </button>
               </div>
             </div>
@@ -803,6 +926,3 @@ function App() {
 }
 
 export default App
-
-
-
