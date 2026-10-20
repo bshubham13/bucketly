@@ -5,6 +5,7 @@ import com.bucketly.api.dto.MemoryResponse;
 import com.bucketly.api.dto.MemoryUpdateRequest;
 import com.bucketly.api.entity.Dream;
 import com.bucketly.api.entity.Memory;
+import com.bucketly.api.entity.User;
 import com.bucketly.api.exception.DuplicateResourceException;
 import com.bucketly.api.exception.ResourceNotFoundException;
 import com.bucketly.api.repository.DreamRepository;
@@ -39,13 +40,16 @@ class MemoryServiceTest {
     @InjectMocks
     private MemoryService memoryService;
 
+    private User sampleUser;
     private Dream sampleDream;
     private Memory sampleMemory;
 
     @BeforeEach
     void setUp() {
+        sampleUser = new User(1L, "owner@bucketly.local", "hash123", "Dream Owner");
         sampleDream = new Dream(
                 1L,
+                sampleUser,
                 "Witness Northern Lights in Tromso",
                 "Rent a glass igloo and watch aurora",
                 "Travel & Nature",
@@ -68,47 +72,47 @@ class MemoryServiceTest {
     }
 
     @Test
-    @DisplayName("getAllMemories should return list of MemoryResponse DTOs")
+    @DisplayName("getAllMemories should return list of memories belonging to authenticated user's dreams")
     void getAllMemories_shouldReturnList() {
-        when(memoryRepository.findAll()).thenReturn(List.of(sampleMemory));
+        when(memoryRepository.findAllByUserId(1L)).thenReturn(List.of(sampleMemory));
 
-        List<MemoryResponse> result = memoryService.getAllMemories();
+        List<MemoryResponse> result = memoryService.getAllMemories(1L);
 
         assertThat(result).hasSize(1);
         assertThat(result.get(0).id()).isEqualTo(10L);
         assertThat(result.get(0).dreamId()).isEqualTo(1L);
         assertThat(result.get(0).dreamTitle()).isEqualTo("Witness Northern Lights in Tromso");
-        verify(memoryRepository, times(1)).findAll();
+        verify(memoryRepository, times(1)).findAllByUserId(1L);
     }
 
     @Test
-    @DisplayName("getMemoryById should return MemoryResponse when found")
-    void getMemoryById_whenFound_shouldReturnMemory() {
-        when(memoryRepository.findById(10L)).thenReturn(Optional.of(sampleMemory));
+    @DisplayName("getMemoryById should return MemoryResponse when memory belongs to current user")
+    void getMemoryById_whenFoundForOwner_shouldReturnMemory() {
+        when(memoryRepository.findByIdAndUserId(10L, 1L)).thenReturn(Optional.of(sampleMemory));
 
-        MemoryResponse result = memoryService.getMemoryById(10L);
+        MemoryResponse result = memoryService.getMemoryById(10L, 1L);
 
         assertThat(result).isNotNull();
         assertThat(result.id()).isEqualTo(10L);
         assertThat(result.story()).isEqualTo("Unbelievable green auroras over the fjords!");
-        verify(memoryRepository, times(1)).findById(10L);
+        verify(memoryRepository, times(1)).findByIdAndUserId(10L, 1L);
     }
 
     @Test
-    @DisplayName("getMemoryById should throw ResourceNotFoundException when missing")
-    void getMemoryById_whenNotFound_shouldThrowException() {
-        when(memoryRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("getMemoryById should throw 404 when memory is foreign-owned, legacy, or missing")
+    void getMemoryById_whenNotFoundOrForeignOwned_shouldThrowException() {
+        when(memoryRepository.findByIdAndUserId(10L, 2L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> memoryService.getMemoryById(999L))
+        assertThatThrownBy(() -> memoryService.getMemoryById(10L, 2L))
                 .isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("999");
+                .hasMessageContaining("10");
 
-        verify(memoryRepository, times(1)).findById(999L);
+        verify(memoryRepository, times(1)).findByIdAndUserId(10L, 2L);
     }
 
     @Test
-    @DisplayName("createMemory should save memory and mark Dream status as Completed")
-    void createMemory_whenValid_shouldSaveAndMarkDreamCompleted() {
+    @DisplayName("createMemory should save memory and mark Dream Completed when dream belongs to current user")
+    void createMemory_whenValidForOwnedDream_shouldSaveAndMarkDreamCompleted() {
         MemoryCreateRequest request = new MemoryCreateRequest(
                 1L,
                 LocalDate.of(2026, 1, 15),
@@ -117,7 +121,7 @@ class MemoryServiceTest {
                 "aurora.jpg"
         );
 
-        when(dreamRepository.findById(1L)).thenReturn(Optional.of(sampleDream));
+        when(dreamRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(sampleDream));
         when(memoryRepository.existsByDreamId(1L)).thenReturn(false);
         when(memoryRepository.save(any(Memory.class))).thenAnswer(inv -> {
             Memory m = inv.getArgument(0);
@@ -127,38 +131,41 @@ class MemoryServiceTest {
             return m;
         });
 
-        MemoryResponse created = memoryService.createMemory(request);
+        MemoryResponse created = memoryService.createMemory(request, 1L);
 
         assertThat(created.id()).isEqualTo(10L);
         assertThat(created.dreamId()).isEqualTo(1L);
         assertThat(sampleDream.getStatus()).isEqualTo("Completed");
+        verify(dreamRepository, times(1)).findByIdAndUserId(1L, 1L);
         verify(dreamRepository, times(1)).save(sampleDream);
         verify(memoryRepository, times(1)).save(any(Memory.class));
     }
 
     @Test
-    @DisplayName("createMemory should throw ResourceNotFoundException when Dream does not exist")
-    void createMemory_whenDreamNotFound_shouldThrowException() {
+    @DisplayName("createMemory should throw 404 when referenced Dream belongs to another user or is unassigned legacy")
+    void createMemory_whenDreamForeignOwnedOrLegacy_shouldThrowException() {
         MemoryCreateRequest request = new MemoryCreateRequest(
-                999L,
+                1L,
                 LocalDate.now(),
-                "Non-existent dream story",
+                "Attempting to claim someone else's dream",
                 null,
                 null
         );
 
-        when(dreamRepository.findById(999L)).thenReturn(Optional.empty());
+        // User 2 attempts to create memory on Dream 1 (owned by User 1) -> 404
+        when(dreamRepository.findByIdAndUserId(1L, 2L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> memoryService.createMemory(request))
+        assertThatThrownBy(() -> memoryService.createMemory(request, 2L))
                 .isInstanceOf(ResourceNotFoundException.class)
-                .hasMessageContaining("999");
+                .hasMessageContaining("1");
 
+        verify(dreamRepository, times(1)).findByIdAndUserId(1L, 2L);
         verify(memoryRepository, never()).save(any(Memory.class));
     }
 
     @Test
-    @DisplayName("createMemory should throw DuplicateResourceException when memory already exists for dream")
-    void createMemory_whenDuplicate_shouldThrowException() {
+    @DisplayName("createMemory should throw DuplicateResourceException when memory already exists for owned dream")
+    void createMemory_whenDuplicateForOwnedDream_shouldThrowException() {
         MemoryCreateRequest request = new MemoryCreateRequest(
                 1L,
                 LocalDate.now(),
@@ -167,10 +174,10 @@ class MemoryServiceTest {
                 null
         );
 
-        when(dreamRepository.findById(1L)).thenReturn(Optional.of(sampleDream));
+        when(dreamRepository.findByIdAndUserId(1L, 1L)).thenReturn(Optional.of(sampleDream));
         when(memoryRepository.existsByDreamId(1L)).thenReturn(true);
 
-        assertThatThrownBy(() -> memoryService.createMemory(request))
+        assertThatThrownBy(() -> memoryService.createMemory(request, 1L))
                 .isInstanceOf(DuplicateResourceException.class)
                 .hasMessageContaining("already exists");
 
@@ -178,8 +185,8 @@ class MemoryServiceTest {
     }
 
     @Test
-    @DisplayName("updateMemory should update completion date and story")
-    void updateMemory_whenFound_shouldUpdate() {
+    @DisplayName("updateMemory should update memory when memory belongs to current user")
+    void updateMemory_whenFoundForOwner_shouldUpdate() {
         MemoryUpdateRequest request = new MemoryUpdateRequest(
                 LocalDate.of(2026, 2, 20),
                 "Updated personal story reflection",
@@ -187,20 +194,20 @@ class MemoryServiceTest {
                 "new_aurora.jpg"
         );
 
-        when(memoryRepository.findById(10L)).thenReturn(Optional.of(sampleMemory));
+        when(memoryRepository.findByIdAndUserId(10L, 1L)).thenReturn(Optional.of(sampleMemory));
         when(memoryRepository.save(any(Memory.class))).thenAnswer(inv -> inv.getArgument(0));
 
-        MemoryResponse updated = memoryService.updateMemory(10L, request);
+        MemoryResponse updated = memoryService.updateMemory(10L, request, 1L);
 
         assertThat(updated.completedDate()).isEqualTo(LocalDate.of(2026, 2, 20));
         assertThat(updated.story()).isEqualTo("Updated personal story reflection");
-        verify(memoryRepository, times(1)).findById(10L);
+        verify(memoryRepository, times(1)).findByIdAndUserId(10L, 1L);
         verify(memoryRepository, times(1)).save(sampleMemory);
     }
 
     @Test
-    @DisplayName("updateMemory should throw ResourceNotFoundException when memory missing")
-    void updateMemory_whenNotFound_shouldThrowException() {
+    @DisplayName("updateMemory should throw 404 when memory belongs to another user, legacy, or missing")
+    void updateMemory_whenNotFoundOrForeignOwned_shouldThrowException() {
         MemoryUpdateRequest request = new MemoryUpdateRequest(
                 LocalDate.now(),
                 "Story",
@@ -208,39 +215,41 @@ class MemoryServiceTest {
                 null
         );
 
-        when(memoryRepository.findById(999L)).thenReturn(Optional.empty());
+        when(memoryRepository.findByIdAndUserId(999L, 2L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> memoryService.updateMemory(999L, request))
+        assertThatThrownBy(() -> memoryService.updateMemory(999L, request, 2L))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("999");
 
+        verify(memoryRepository, times(1)).findByIdAndUserId(999L, 2L);
         verify(memoryRepository, never()).save(any(Memory.class));
     }
 
     @Test
-    @DisplayName("deleteMemory should delete memory only and preserve Dream status as Completed")
-    void deleteMemory_whenFound_shouldDeleteOnlyMemoryAndKeepDreamCompleted() {
+    @DisplayName("deleteMemory should delete memory and preserve Dream status when memory belongs to current user")
+    void deleteMemory_whenFoundForOwner_shouldDeleteOnlyMemoryAndKeepDreamCompleted() {
         sampleDream.setStatus("Completed");
 
-        when(memoryRepository.findById(10L)).thenReturn(Optional.of(sampleMemory));
+        when(memoryRepository.findByIdAndUserId(10L, 1L)).thenReturn(Optional.of(sampleMemory));
 
-        memoryService.deleteMemory(10L);
+        memoryService.deleteMemory(10L, 1L);
 
         assertThat(sampleDream.getStatus()).isEqualTo("Completed");
+        verify(memoryRepository, times(1)).findByIdAndUserId(10L, 1L);
         verify(dreamRepository, never()).save(any(Dream.class));
         verify(memoryRepository, times(1)).delete(sampleMemory);
     }
 
     @Test
-    @DisplayName("deleteMemory should throw ResourceNotFoundException when memory missing")
-    void deleteMemory_whenNotFound_shouldThrowException() {
-        when(memoryRepository.findById(999L)).thenReturn(Optional.empty());
+    @DisplayName("deleteMemory should throw 404 when memory belongs to another user, legacy, or missing")
+    void deleteMemory_whenNotFoundOrForeignOwned_shouldThrowException() {
+        when(memoryRepository.findByIdAndUserId(999L, 2L)).thenReturn(Optional.empty());
 
-        assertThatThrownBy(() -> memoryService.deleteMemory(999L))
+        assertThatThrownBy(() -> memoryService.deleteMemory(999L, 2L))
                 .isInstanceOf(ResourceNotFoundException.class)
                 .hasMessageContaining("999");
 
+        verify(memoryRepository, times(1)).findByIdAndUserId(999L, 2L);
         verify(memoryRepository, never()).delete(any(Memory.class));
     }
 }
-

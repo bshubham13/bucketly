@@ -1,16 +1,20 @@
 package com.bucketly.api.controller;
 
+import com.bucketly.api.config.SecurityConfig;
 import com.bucketly.api.dto.MemoryCreateRequest;
 import com.bucketly.api.dto.MemoryResponse;
 import com.bucketly.api.dto.MemoryUpdateRequest;
 import com.bucketly.api.exception.DuplicateResourceException;
 import com.bucketly.api.exception.GlobalExceptionHandler;
 import com.bucketly.api.exception.ResourceNotFoundException;
+import com.bucketly.api.security.JwtService;
+import com.bucketly.api.security.UserPrincipal;
 import com.bucketly.api.service.MemoryService;
 import org.junit.jupiter.api.DisplayName;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
+import org.springframework.context.annotation.Import;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.http.MediaType;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
@@ -24,7 +28,10 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.doNothing;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.csrf;
+import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
@@ -33,6 +40,7 @@ import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
 @WebMvcTest(controllers = {MemoryController.class, GlobalExceptionHandler.class})
+@Import(SecurityConfig.class)
 class MemoryControllerTest {
 
     @Autowired
@@ -41,8 +49,14 @@ class MemoryControllerTest {
     @MockitoBean
     private MemoryService memoryService;
 
+    @MockitoBean
+    private JwtService jwtService;
+
+    private final UserPrincipal user1 = new UserPrincipal(1L, "user1@bucketly.local");
+    private final UserPrincipal user2 = new UserPrincipal(2L, "user2@bucketly.local");
+
     @Test
-    @DisplayName("GET /api/memories returns 200 OK with list of memories")
+    @DisplayName("GET /api/memories returns 200 OK with list of memories for authenticated user")
     void getAllMemories_shouldReturn200() throws Exception {
         MemoryResponse response = new MemoryResponse(
                 10L,
@@ -56,18 +70,29 @@ class MemoryControllerTest {
                 LocalDateTime.now(),
                 LocalDateTime.now()
         );
-        when(memoryService.getAllMemories()).thenReturn(List.of(response));
+        when(memoryService.getAllMemories(1L)).thenReturn(List.of(response));
 
-        mockMvc.perform(get("/api/memories"))
+        mockMvc.perform(get("/api/memories")
+                        .with(user(user1)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$[0].id").value(10))
                 .andExpect(jsonPath("$[0].dreamId").value(1))
                 .andExpect(jsonPath("$[0].dreamTitle").value("Northern Lights in Tromso"))
                 .andExpect(jsonPath("$[0].story").value("Spectacular lights!"));
+
+        verify(memoryService).getAllMemories(1L);
     }
 
     @Test
-    @DisplayName("GET /api/memories/{id} returns 200 OK when found")
+    @DisplayName("GET /api/memories returns 401 Unauthorized when unauthenticated")
+    void getAllMemories_unauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/memories"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.status").value(401));
+    }
+
+    @Test
+    @DisplayName("GET /api/memories/{id} returns 200 OK when found for owner")
     void getMemoryById_whenFound_shouldReturn200() throws Exception {
         MemoryResponse response = new MemoryResponse(
                 10L,
@@ -81,29 +106,33 @@ class MemoryControllerTest {
                 LocalDateTime.now(),
                 LocalDateTime.now()
         );
-        when(memoryService.getMemoryById(10L)).thenReturn(response);
+        when(memoryService.getMemoryById(10L, 1L)).thenReturn(response);
 
-        mockMvc.perform(get("/api/memories/10"))
+        mockMvc.perform(get("/api/memories/10")
+                        .with(user(user1)))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(10))
                 .andExpect(jsonPath("$.dreamId").value(1))
                 .andExpect(jsonPath("$.story").value("Spectacular lights!"));
+
+        verify(memoryService).getMemoryById(10L, 1L);
     }
 
     @Test
-    @DisplayName("GET /api/memories/{id} returns 404 Not Found when missing")
+    @DisplayName("GET /api/memories/{id} returns 404 Not Found when missing or foreign-owned")
     void getMemoryById_whenNotFound_shouldReturn404() throws Exception {
-        when(memoryService.getMemoryById(999L))
+        when(memoryService.getMemoryById(999L, 1L))
                 .thenThrow(new ResourceNotFoundException("Memory not found with id: 999"));
 
-        mockMvc.perform(get("/api/memories/999"))
+        mockMvc.perform(get("/api/memories/999")
+                        .with(user(user1)))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Not Found"))
                 .andExpect(jsonPath("$.message").value("Memory not found with id: 999"));
     }
 
     @Test
-    @DisplayName("POST /api/memories returns 201 Created on valid request with past date")
+    @DisplayName("POST /api/memories returns 201 Created on valid request with past date and owner userId")
     void createMemory_whenValidPastDate_shouldReturn201() throws Exception {
         MemoryResponse created = new MemoryResponse(
                 10L,
@@ -117,7 +146,7 @@ class MemoryControllerTest {
                 LocalDateTime.now(),
                 LocalDateTime.now()
         );
-        when(memoryService.createMemory(any(MemoryCreateRequest.class))).thenReturn(created);
+        when(memoryService.createMemory(any(MemoryCreateRequest.class), eq(1L))).thenReturn(created);
 
         String json = """
                 {
@@ -130,6 +159,8 @@ class MemoryControllerTest {
                 """;
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isCreated())
@@ -137,6 +168,8 @@ class MemoryControllerTest {
                 .andExpect(jsonPath("$.dreamId").value(1))
                 .andExpect(jsonPath("$.completedDate").value("2026-01-15"))
                 .andExpect(jsonPath("$.story").value("Unbelievable experience in glass igloo!"));
+
+        verify(memoryService).createMemory(any(MemoryCreateRequest.class), eq(1L));
     }
 
     @Test
@@ -155,7 +188,7 @@ class MemoryControllerTest {
                 LocalDateTime.now(),
                 LocalDateTime.now()
         );
-        when(memoryService.createMemory(any(MemoryCreateRequest.class))).thenReturn(created);
+        when(memoryService.createMemory(any(MemoryCreateRequest.class), eq(1L))).thenReturn(created);
 
         String json = String.format("""
                 {
@@ -166,6 +199,8 @@ class MemoryControllerTest {
                 """, today);
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isCreated())
@@ -186,6 +221,8 @@ class MemoryControllerTest {
                 """, futureDate);
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isBadRequest())
@@ -204,6 +241,8 @@ class MemoryControllerTest {
                 """;
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isBadRequest())
@@ -222,6 +261,8 @@ class MemoryControllerTest {
                 """;
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isBadRequest())
@@ -230,31 +271,36 @@ class MemoryControllerTest {
     }
 
     @Test
-    @DisplayName("POST /api/memories returns 404 Not Found when Dream does not exist")
-    void createMemory_whenDreamNotFound_shouldReturn404() throws Exception {
-        when(memoryService.createMemory(any(MemoryCreateRequest.class)))
-                .thenThrow(new ResourceNotFoundException("Dream not found with id: 999"));
+    @DisplayName("POST /api/memories returns 404 when Dream belongs to another user, is legacy, or does not exist")
+    void createMemory_whenDreamNotFoundOrForeignOwned_shouldReturn404() throws Exception {
+        // User 2 attempts to create memory on Dream 1 (owned by User 1) -> 404
+        when(memoryService.createMemory(any(MemoryCreateRequest.class), eq(2L)))
+                .thenThrow(new ResourceNotFoundException("Dream not found with id: 1"));
 
         String json = """
                 {
-                    "dreamId": 999,
+                    "dreamId": 1,
                     "completedDate": "2026-01-15",
-                    "story": "Dream not existing"
+                    "story": "Attempting cross-user memory creation"
                 }
                 """;
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user2))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Not Found"))
-                .andExpect(jsonPath("$.message").value("Dream not found with id: 999"));
+                .andExpect(jsonPath("$.message").value("Dream not found with id: 1"));
+
+        verify(memoryService).createMemory(any(MemoryCreateRequest.class), eq(2L));
     }
 
     @Test
     @DisplayName("POST /api/memories returns 409 Conflict when duplicate memory for dream in service")
     void createMemory_whenDuplicate_shouldReturn409() throws Exception {
-        when(memoryService.createMemory(any(MemoryCreateRequest.class)))
+        when(memoryService.createMemory(any(MemoryCreateRequest.class), eq(1L)))
                 .thenThrow(new DuplicateResourceException("A memory already exists for dream with id: 1"));
 
         String json = """
@@ -266,6 +312,8 @@ class MemoryControllerTest {
                 """;
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isConflict())
@@ -276,7 +324,7 @@ class MemoryControllerTest {
     @Test
     @DisplayName("POST /api/memories returns 409 Conflict when database unique constraint violation occurs")
     void createMemory_whenDataIntegrityViolationDuplicate_shouldReturn409() throws Exception {
-        when(memoryService.createMemory(any(MemoryCreateRequest.class)))
+        when(memoryService.createMemory(any(MemoryCreateRequest.class), eq(1L)))
                 .thenThrow(new DataIntegrityViolationException("Duplicate entry '1' for key 'uk_memories_dream_id'"));
 
         String json = """
@@ -288,6 +336,8 @@ class MemoryControllerTest {
                 """;
 
         mockMvc.perform(post("/api/memories")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isConflict())
@@ -296,7 +346,7 @@ class MemoryControllerTest {
     }
 
     @Test
-    @DisplayName("PUT /api/memories/{id} returns 200 OK on valid update")
+    @DisplayName("PUT /api/memories/{id} returns 200 OK on valid update by owner")
     void updateMemory_whenFound_shouldReturn200() throws Exception {
         MemoryResponse updated = new MemoryResponse(
                 10L,
@@ -310,7 +360,7 @@ class MemoryControllerTest {
                 LocalDateTime.now(),
                 LocalDateTime.now()
         );
-        when(memoryService.updateMemory(eq(10L), any(MemoryUpdateRequest.class))).thenReturn(updated);
+        when(memoryService.updateMemory(eq(10L), any(MemoryUpdateRequest.class), eq(1L))).thenReturn(updated);
 
         String json = """
                 {
@@ -322,12 +372,16 @@ class MemoryControllerTest {
                 """;
 
         mockMvc.perform(put("/api/memories/10")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.id").value(10))
                 .andExpect(jsonPath("$.completedDate").value("2026-02-20"))
                 .andExpect(jsonPath("$.story").value("Updated aurora story"));
+
+        verify(memoryService).updateMemory(eq(10L), any(MemoryUpdateRequest.class), eq(1L));
     }
 
     @Test
@@ -342,6 +396,8 @@ class MemoryControllerTest {
                 """, futureDate);
 
         mockMvc.perform(put("/api/memories/10")
+                        .with(user(user1))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isBadRequest())
@@ -350,42 +406,54 @@ class MemoryControllerTest {
     }
 
     @Test
-    @DisplayName("PUT /api/memories/{id} returns 404 Not Found when memory is missing")
-    void updateMemory_whenNotFound_shouldReturn404() throws Exception {
-        when(memoryService.updateMemory(eq(999L), any(MemoryUpdateRequest.class)))
-                .thenThrow(new ResourceNotFoundException("Memory not found with id: 999"));
+    @DisplayName("PUT /api/memories/{id} returns 404 when memory belongs to another user or is missing")
+    void updateMemory_whenNotFoundOrForeignOwned_shouldReturn404() throws Exception {
+        when(memoryService.updateMemory(eq(10L), any(MemoryUpdateRequest.class), eq(2L)))
+                .thenThrow(new ResourceNotFoundException("Memory not found with id: 10"));
 
         String json = """
                 {
                     "completedDate": "2026-02-20",
-                    "story": "Memory missing"
+                    "story": "Cross-user update attempt"
                 }
                 """;
 
-        mockMvc.perform(put("/api/memories/999")
+        mockMvc.perform(put("/api/memories/10")
+                        .with(user(user2))
+                        .with(csrf())
                         .contentType(MediaType.APPLICATION_JSON)
                         .content(json))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Not Found"));
+
+        verify(memoryService).updateMemory(eq(10L), any(MemoryUpdateRequest.class), eq(2L));
     }
 
     @Test
-    @DisplayName("DELETE /api/memories/{id} returns 204 No Content when found")
+    @DisplayName("DELETE /api/memories/{id} returns 204 No Content when deleted by owner")
     void deleteMemory_whenFound_shouldReturn204() throws Exception {
-        doNothing().when(memoryService).deleteMemory(10L);
+        doNothing().when(memoryService).deleteMemory(10L, 1L);
 
-        mockMvc.perform(delete("/api/memories/10"))
+        mockMvc.perform(delete("/api/memories/10")
+                        .with(user(user1))
+                        .with(csrf()))
                 .andExpect(status().isNoContent());
+
+        verify(memoryService).deleteMemory(10L, 1L);
     }
 
     @Test
-    @DisplayName("DELETE /api/memories/{id} returns 404 Not Found when missing")
-    void deleteMemory_whenNotFound_shouldReturn404() throws Exception {
-        doThrow(new ResourceNotFoundException("Memory not found with id: 999"))
-                .when(memoryService).deleteMemory(999L);
+    @DisplayName("DELETE /api/memories/{id} returns 404 when memory belongs to another user or is missing")
+    void deleteMemory_whenNotFoundOrForeignOwned_shouldReturn404() throws Exception {
+        doThrow(new ResourceNotFoundException("Memory not found with id: 10"))
+                .when(memoryService).deleteMemory(10L, 2L);
 
-        mockMvc.perform(delete("/api/memories/999"))
+        mockMvc.perform(delete("/api/memories/10")
+                        .with(user(user2))
+                        .with(csrf()))
                 .andExpect(status().isNotFound())
                 .andExpect(jsonPath("$.error").value("Not Found"));
+
+        verify(memoryService).deleteMemory(10L, 2L);
     }
 }

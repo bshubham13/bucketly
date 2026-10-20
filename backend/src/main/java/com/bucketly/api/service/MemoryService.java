@@ -27,22 +27,22 @@ public class MemoryService {
     }
 
     @Transactional(readOnly = true)
-    public List<MemoryResponse> getAllMemories() {
-        return memoryRepository.findAll()
+    public List<MemoryResponse> getAllMemories(Long userId) {
+        return memoryRepository.findAllByUserId(userId)
                 .stream()
                 .map(MemoryResponse::fromEntity)
                 .toList();
     }
 
     @Transactional(readOnly = true)
-    public MemoryResponse getMemoryById(Long id) {
-        Memory memory = memoryRepository.findById(id)
+    public MemoryResponse getMemoryById(Long id, Long userId) {
+        Memory memory = memoryRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Memory not found with id: " + id));
         return MemoryResponse.fromEntity(memory);
     }
 
-    public MemoryResponse createMemory(MemoryCreateRequest request) {
-        Dream dream = dreamRepository.findById(request.dreamId())
+    public MemoryResponse createMemory(MemoryCreateRequest request, Long userId) {
+        Dream dream = dreamRepository.findByIdAndUserId(request.dreamId(), userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Dream not found with id: " + request.dreamId()));
 
         if (memoryRepository.existsByDreamId(request.dreamId())) {
@@ -66,8 +66,8 @@ public class MemoryService {
         return MemoryResponse.fromEntity(savedMemory);
     }
 
-    public MemoryResponse updateMemory(Long id, MemoryUpdateRequest request) {
-        Memory existingMemory = memoryRepository.findById(id)
+    public MemoryResponse updateMemory(Long id, MemoryUpdateRequest request, Long userId) {
+        Memory existingMemory = memoryRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Memory not found with id: " + id));
 
         existingMemory.setCompletedDate(request.completedDate());
@@ -84,8 +84,8 @@ public class MemoryService {
      * Business rule: Deleting a memory removes only the Memory reflection record from the Memory Wall.
      * It does NOT change the associated Dream status—a Dream that was Completed remains Completed.
      */
-    public void deleteMemory(Long id) {
-        Memory existingMemory = memoryRepository.findById(id)
+    public void deleteMemory(Long id, Long userId) {
+        Memory existingMemory = memoryRepository.findByIdAndUserId(id, userId)
                 .orElseThrow(() -> new ResourceNotFoundException("Memory not found with id: " + id));
 
         memoryRepository.delete(existingMemory);

@@ -2,6 +2,8 @@ import { useState, useEffect } from 'react'
 import './App.css'
 import { dreamApi, type DreamRequest, type DreamResponse } from './services/dreamService'
 import { memoryApi, type MemoryCreateRequest, type MemoryUpdateRequest, type MemoryResponse } from './services/memoryService'
+import { authService, type AuthResponse } from './services/authService'
+import { ApiError } from './services/apiClient'
 
 // Simple, beginner-friendly TypeScript type representing one bucket list goal
 export interface DreamItem {
@@ -120,6 +122,26 @@ function DreamCard({
 }
 
 function App() {
+  // Authentication & session state
+  const [currentUser, setCurrentUser] = useState<AuthResponse | null>(null)
+  const [isAuthChecking, setIsAuthChecking] = useState<boolean>(true)
+  const [authMode, setAuthMode] = useState<'login' | 'register'>('login')
+  const [authGlobalMessage, setAuthGlobalMessage] = useState<string | null>(null)
+
+  // Login form state
+  const [loginEmail, setLoginEmail] = useState('')
+  const [loginPassword, setLoginPassword] = useState('')
+  const [loginError, setLoginError] = useState<string | null>(null)
+  const [isLoggingIn, setIsLoggingIn] = useState(false)
+
+  // Register form state
+  const [regFullName, setRegFullName] = useState('')
+  const [regEmail, setRegEmail] = useState('')
+  const [regPassword, setRegPassword] = useState('')
+  const [regError, setRegError] = useState<string | null>(null)
+  const [regValidationErrors, setRegValidationErrors] = useState<Record<string, string>>({})
+  const [isRegistering, setIsRegistering] = useState(false)
+
   // Navigation tab state: 'Dashboard' | 'My Bucket List' | 'Memory Wall'
   const [activeNav, setActiveNav] = useState<'Dashboard' | 'My Bucket List' | 'Memory Wall'>('Dashboard')
 
@@ -181,9 +203,15 @@ function App() {
       const data = await dreamApi.getAll()
       setDreams(data.map(toDreamItem))
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        setCurrentUser(null)
+        setDreams([])
+        setAuthGlobalMessage('Your session has expired. Please sign in again.')
+        return
+      }
       const message = err instanceof Error ? err.message : 'Unable to connect to Bucketly API. Ensure backend is running on http://localhost:8080.'
       setFetchError(message)
-      setDreams([]) // Never silently fall back to mock data
+      setDreams([])
     } finally {
       setIsLoading(false)
     }
@@ -197,6 +225,11 @@ function App() {
       const data = await memoryApi.getAll()
       setMemories(data)
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        setCurrentUser(null)
+        setMemories([])
+        return
+      }
       const message = err instanceof Error ? err.message : 'Unable to load Memory Wall reflections from backend.'
       setMemoriesError(message)
       setMemories([])
@@ -205,10 +238,130 @@ function App() {
     }
   }
 
+  // Restore session on initial load and handle StrictMode double-mount gracefully
   useEffect(() => {
-    loadDreams()
-    loadMemories()
+    let isMounted = true
+
+    const initializeAuth = async () => {
+      try {
+        const user = await authService.getMe()
+        if (!isMounted) return
+        if (user) {
+          setCurrentUser(user)
+          await Promise.all([loadDreams(), loadMemories()])
+        } else {
+          setCurrentUser(null)
+          // Prime CSRF token for future login/register
+          await authService.initCsrf()
+        }
+      } catch {
+        if (!isMounted) return
+        setCurrentUser(null)
+        await authService.initCsrf()
+      } finally {
+        if (isMounted) {
+          setIsAuthChecking(false)
+        }
+      }
+    }
+
+    initializeAuth()
+
+    return () => {
+      isMounted = false
+    }
   }, [])
+
+  // Handle Login submission
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!loginEmail.trim() || !loginPassword) {
+      setLoginError('Please enter both email and password.')
+      return
+    }
+    setIsLoggingIn(true)
+    setLoginError(null)
+    setAuthGlobalMessage(null)
+    try {
+      const user = await authService.login({
+        email: loginEmail.trim(),
+        password: loginPassword
+      })
+      setCurrentUser(user)
+      setLoginPassword('')
+      await Promise.all([loadDreams(), loadMemories()])
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Invalid email or password.'
+      setLoginError(message)
+    } finally {
+      setIsLoggingIn(false)
+    }
+  }
+
+  // Handle Register submission
+  const handleRegister = async (e: React.FormEvent) => {
+    e.preventDefault()
+    setRegError(null)
+    setRegValidationErrors({})
+    setAuthGlobalMessage(null)
+
+    if (!regFullName.trim()) {
+      setRegError('Please enter your full name.')
+      return
+    }
+    if (!regEmail.trim()) {
+      setRegError('Please enter an email address.')
+      return
+    }
+    if (regPassword.length < 8) {
+      setRegError('Password must be at least 8 characters long.')
+      return
+    }
+
+    setIsRegistering(true)
+    try {
+      await authService.register({
+        fullName: regFullName.trim(),
+        email: regEmail.trim(),
+        password: regPassword
+      })
+      // Immediately establish session via login
+      const user = await authService.login({
+        email: regEmail.trim(),
+        password: regPassword
+      })
+      setCurrentUser(user)
+      setRegFullName('')
+      setRegEmail('')
+      setRegPassword('')
+      await Promise.all([loadDreams(), loadMemories()])
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.validationErrors) {
+        setRegValidationErrors(err.validationErrors)
+        setRegError(err.message)
+      } else {
+        const message = err instanceof Error ? err.message : 'Registration failed. Please try again.'
+        setRegError(message)
+      }
+    } finally {
+      setIsRegistering(false)
+    }
+  }
+
+  // Handle Logout action
+  const handleLogout = async () => {
+    try {
+      await authService.logout()
+    } catch {
+      // Clear frontend auth state even if server logout request encounters issues
+    } finally {
+      setCurrentUser(null)
+      setDreams([])
+      setMemories([])
+      setAuthGlobalMessage('You have been signed out successfully.')
+      await authService.initCsrf()
+    }
+  }
 
   // Eligible dreams for memory creation: dreams that do NOT already have a memory
   const eligibleDreams = dreams.filter(
@@ -294,6 +447,12 @@ function App() {
       setMemories((prev) => prev.filter((m) => m.dreamId !== deletingDream.id))
       setDeletingDream(null)
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        setCurrentUser(null)
+        setDreams([])
+        setAuthGlobalMessage('Your session has expired. Please sign in again.')
+        return
+      }
       const message = err instanceof Error ? err.message : 'Failed to delete dream. Please check backend connection.'
       setDeleteError(message)
     } finally {
@@ -335,6 +494,12 @@ function App() {
         handleCloseModal()
       }
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        setCurrentUser(null)
+        setDreams([])
+        setAuthGlobalMessage('Your session has expired. Please sign in again.')
+        return
+      }
       const message = err instanceof Error ? err.message : 'Operation failed. Please check backend connection.'
       setActionError(message)
     } finally {
@@ -400,6 +565,12 @@ function App() {
       setMemories((prev) => prev.filter((m) => m.id !== deletingMemory.id))
       setDeletingMemory(null)
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        setCurrentUser(null)
+        setMemories([])
+        setAuthGlobalMessage('Your session has expired. Please sign in again.')
+        return
+      }
       const message = err instanceof Error ? err.message : 'Failed to delete memory reflection.'
       setDeleteMemoryError(message)
     } finally {
@@ -455,11 +626,251 @@ function App() {
         handleCloseMemoryModal()
       }
     } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        setCurrentUser(null)
+        setMemories([])
+        setAuthGlobalMessage('Your session has expired. Please sign in again.')
+        return
+      }
       const message = err instanceof Error ? err.message : 'Failed to save memory reflection.'
       setMemoryFormError(message)
     } finally {
       setIsSubmittingMemory(false)
     }
+  }
+
+  // Initial session restoration loading screen
+  if (isAuthChecking) {
+    return (
+      <div className="auth-loading-screen" role="status" aria-live="polite">
+        <div className="loading-spinner" aria-hidden="true" />
+        <h3 className="state-title">Restoring Session...</h3>
+        <p className="state-text">Connecting to Bucketly.</p>
+      </div>
+    )
+  }
+
+  // Unauthenticated view: Login & Registration screen
+  if (!currentUser) {
+    return (
+      <div className="auth-page-container">
+        <div className="auth-card">
+          {/* Brand Logo & Header */}
+          <div className="auth-brand-section">
+            <div className="brand-logo-badge" aria-hidden="true">✦</div>
+            <div>
+              <h1 className="brand-title">Bucketly</h1>
+              <p className="brand-tagline">Make Life Count</p>
+            </div>
+          </div>
+
+          {/* Flash / Status Message */}
+          {authGlobalMessage && (
+            <div className="auth-info-banner" role="status">
+              <span>{authGlobalMessage}</span>
+            </div>
+          )}
+
+          {/* Mode Switcher Tabs */}
+          <div className="auth-tabs" role="tablist">
+            <button
+              type="button"
+              role="tab"
+              aria-selected={authMode === 'login'}
+              className={`auth-tab ${authMode === 'login' ? 'active' : ''}`}
+              onClick={() => {
+                setAuthMode('login')
+                setLoginError(null)
+                setRegError(null)
+                setRegValidationErrors({})
+                setAuthGlobalMessage(null)
+              }}
+            >
+              Sign In
+            </button>
+            <button
+              type="button"
+              role="tab"
+              aria-selected={authMode === 'register'}
+              className={`auth-tab ${authMode === 'register' ? 'active' : ''}`}
+              onClick={() => {
+                setAuthMode('register')
+                setLoginError(null)
+                setRegError(null)
+                setRegValidationErrors({})
+                setAuthGlobalMessage(null)
+              }}
+            >
+              Create Account
+            </button>
+          </div>
+
+          {authMode === 'login' ? (
+            <form onSubmit={handleLogin} className="auth-form" noValidate>
+              {loginError && (
+                <div className="form-action-error" role="alert">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <span>{loginError}</span>
+                </div>
+              )}
+
+              <div className="form-group">
+                <label htmlFor="login-email" className="form-label">
+                  Email Address <span className="required-star" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="login-email"
+                  type="email"
+                  className="form-input"
+                  placeholder="name@example.com"
+                  value={loginEmail}
+                  onChange={(e) => setLoginEmail(e.target.value)}
+                  autoComplete="email"
+                  required
+                />
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="login-password" className="form-label">
+                  Password <span className="required-star" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="login-password"
+                  type="password"
+                  className="form-input"
+                  placeholder="••••••••"
+                  value={loginPassword}
+                  onChange={(e) => setLoginPassword(e.target.value)}
+                  autoComplete="current-password"
+                  required
+                />
+              </div>
+
+              <button
+                type="submit"
+                className="btn-primary auth-submit-btn"
+                disabled={isLoggingIn}
+              >
+                {isLoggingIn ? 'Signing In...' : 'Sign In to Bucketly'}
+              </button>
+
+              <p className="auth-switch-prompt">
+                Don't have an account?{' '}
+                <button
+                  type="button"
+                  className="auth-inline-link"
+                  onClick={() => {
+                    setAuthMode('register')
+                    setLoginError(null)
+                    setAuthGlobalMessage(null)
+                  }}
+                >
+                  Create one now →
+                </button>
+              </p>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="auth-form" noValidate>
+              {regError && (
+                <div className="form-action-error" role="alert">
+                  <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+                    <circle cx="12" cy="12" r="10"/>
+                    <line x1="12" y1="8" x2="12" y2="12"/>
+                    <line x1="12" y1="16" x2="12.01" y2="16"/>
+                  </svg>
+                  <span>{regError}</span>
+                </div>
+              )}
+
+              <div className="form-group">
+                <label htmlFor="reg-fullname" className="form-label">
+                  Full Name <span className="required-star" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="reg-fullname"
+                  type="text"
+                  className={`form-input ${regValidationErrors.fullName ? 'has-error' : ''}`}
+                  placeholder="Jane Doe"
+                  value={regFullName}
+                  onChange={(e) => setRegFullName(e.target.value)}
+                  autoComplete="name"
+                  required
+                />
+                {regValidationErrors.fullName && (
+                  <p className="form-error-msg" role="alert">{regValidationErrors.fullName}</p>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="reg-email" className="form-label">
+                  Email Address <span className="required-star" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="reg-email"
+                  type="email"
+                  className={`form-input ${regValidationErrors.email ? 'has-error' : ''}`}
+                  placeholder="name@example.com"
+                  value={regEmail}
+                  onChange={(e) => setRegEmail(e.target.value)}
+                  autoComplete="email"
+                  required
+                />
+                {regValidationErrors.email && (
+                  <p className="form-error-msg" role="alert">{regValidationErrors.email}</p>
+                )}
+              </div>
+
+              <div className="form-group">
+                <label htmlFor="reg-password" className="form-label">
+                  Password <span className="required-star" aria-hidden="true">*</span>
+                </label>
+                <input
+                  id="reg-password"
+                  type="password"
+                  className={`form-input ${regValidationErrors.password ? 'has-error' : ''}`}
+                  placeholder="At least 8 characters"
+                  value={regPassword}
+                  onChange={(e) => setRegPassword(e.target.value)}
+                  autoComplete="new-password"
+                  required
+                />
+                {regValidationErrors.password && (
+                  <p className="form-error-msg" role="alert">{regValidationErrors.password}</p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                className="btn-primary auth-submit-btn"
+                disabled={isRegistering}
+              >
+                {isRegistering ? 'Creating Account...' : 'Create Account'}
+              </button>
+
+              <p className="auth-switch-prompt">
+                Already have an account?{' '}
+                <button
+                  type="button"
+                  className="auth-inline-link"
+                  onClick={() => {
+                    setAuthMode('login')
+                    setRegError(null)
+                    setRegValidationErrors({})
+                    setAuthGlobalMessage(null)
+                  }}
+                >
+                  Sign in here →
+                </button>
+              </p>
+            </form>
+          )}
+        </div>
+      </div>
+    )
   }
 
   return (
@@ -527,11 +938,33 @@ function App() {
 
         {/* User Profile Snippet */}
         <div className="sidebar-profile">
-          <div className="profile-avatar" aria-hidden="true">B</div>
-          <div>
-            <p className="profile-name">Explorer Alex</p>
-            <p className="profile-tier">Dreamer Tier • 2026</p>
+          <div className="profile-info-group">
+            <div className="profile-avatar" aria-hidden="true">
+              {currentUser?.fullName ? currentUser.fullName.charAt(0).toUpperCase() : 'B'}
+            </div>
+            <div className="profile-text-group">
+              <p className="profile-name" title={currentUser?.fullName || 'Explorer'}>
+                {currentUser?.fullName || 'Explorer'}
+              </p>
+              <p className="profile-tier" title={currentUser?.email || 'Dreamer'}>
+                {currentUser?.email || 'Dreamer Tier'}
+              </p>
+            </div>
           </div>
+          <button
+            type="button"
+            className="sign-out-btn"
+            onClick={handleLogout}
+            aria-label="Sign out of Bucketly"
+            title="Sign Out"
+          >
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
+              <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
+              <polyline points="16 17 21 12 16 7"/>
+              <line x1="21" y1="12" x2="9" y2="12"/>
+            </svg>
+            Sign Out
+          </button>
         </div>
       </aside>
 
