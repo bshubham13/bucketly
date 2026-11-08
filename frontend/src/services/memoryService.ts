@@ -1,4 +1,4 @@
-import { apiFetch } from './apiClient'
+import { API_BASE_URL, ApiError, apiFetch } from './apiClient'
 
 export interface MemoryCreateRequest {
   dreamId: number
@@ -84,5 +84,57 @@ export const memoryApi = {
     return apiFetch<void>(`/memories/${id}`, {
       method: 'DELETE'
     })
+  },
+
+  /**
+   * Delete an existing memory's photo via DELETE /api/memories/{id}/photo.
+   * Preserves the memory text and milestone.
+   */
+  async deletePhoto(id: number): Promise<MemoryResponse> {
+    return apiFetch<MemoryResponse>(`/memories/${id}/photo`, {
+      method: 'DELETE'
+    })
+  },
+
+  /**
+   * Upload a photo for an existing memory via POST /api/memories/{id}/photo.
+   * Uses FormData and lets the browser automatically set the multipart/form-data boundary.
+   */
+  async uploadPhoto(id: number, file: File): Promise<MemoryResponse> {
+    const formData = new FormData()
+    formData.append('file', file)
+
+    return apiFetch<MemoryResponse>(`/memories/${id}/photo`, {
+      method: 'POST',
+      body: formData
+    })
+  },
+
+  /**
+   * Fetch an authenticated photo as a binary Blob via GET /api/memories/{id}/photo.
+   * Includes credentials to forward the HttpOnly JWT session cookie.
+   */
+  async getPhotoBlob(id: number): Promise<Blob> {
+    const res = await fetch(`${API_BASE_URL}/memories/${id}/photo`, {
+      method: 'GET',
+      credentials: 'include'
+    })
+
+    if (!res.ok) {
+      let errorMessage = `Failed to load photo (HTTP ${res.status})`
+      try {
+        const errorBody = await res.json()
+        if (errorBody.message) {
+          errorMessage = errorBody.message
+        } else if (errorBody.error) {
+          errorMessage = errorBody.error
+        }
+      } catch {
+        // Response was not JSON
+      }
+      throw new ApiError(errorMessage, res.status)
+    }
+
+    return res.blob()
   }
 }
