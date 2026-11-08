@@ -4,8 +4,10 @@ import com.bucketly.api.config.SecurityConfig;
 import com.bucketly.api.dto.MemoryCreateRequest;
 import com.bucketly.api.dto.MemoryResponse;
 import com.bucketly.api.dto.MemoryUpdateRequest;
+import com.bucketly.api.dto.PhotoDownload;
 import com.bucketly.api.exception.DuplicateResourceException;
 import com.bucketly.api.exception.GlobalExceptionHandler;
+import com.bucketly.api.exception.InvalidPhotoException;
 import com.bucketly.api.exception.ResourceNotFoundException;
 import com.bucketly.api.security.JwtService;
 import com.bucketly.api.security.UserPrincipal;
@@ -15,10 +17,14 @@ import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.boot.webmvc.test.autoconfigure.WebMvcTest;
 import org.springframework.context.annotation.Import;
+import org.springframework.core.io.ByteArrayResource;
 import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.mock.web.MockMultipartFile;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.web.servlet.MockMvc;
+import org.springframework.web.multipart.MaxUploadSizeExceededException;
 
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -34,8 +40,11 @@ import static org.springframework.security.test.web.servlet.request.SecurityMock
 import static org.springframework.security.test.web.servlet.request.SecurityMockMvcRequestPostProcessors.user;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.multipart;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.put;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.content;
+import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.header;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.status;
 
@@ -455,5 +464,219 @@ class MemoryControllerTest {
                 .andExpect(jsonPath("$.error").value("Not Found"));
 
         verify(memoryService).deleteMemory(10L, 2L);
+    }
+
+    @Test
+    @DisplayName("POST /api/memories/{id}/photo returns 200 OK with MemoryResponse for owner with CSRF")
+    void uploadPhoto_whenOwnerWithCsrf_shouldReturn200() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "vacation.png", "image/png", new byte[] {1, 2, 3});
+        MemoryResponse response = new MemoryResponse(
+                10L,
+                1L,
+                "Witness Northern Lights",
+                "Travel & Nature",
+                LocalDate.of(2026, 1, 15),
+                "Spectacular lights!",
+                "uuid-key.png",
+                "vacation.png",
+                LocalDateTime.now(),
+                LocalDateTime.now()
+        );
+        when(memoryService.uploadPhoto(eq(10L), any(), eq(1L))).thenReturn(response);
+
+        mockMvc.perform(multipart("/api/memories/10/photo")
+                        .file(file)
+                        .with(user(user1))
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(10))
+                .andExpect(jsonPath("$.photoPath").value("uuid-key.png"))
+                .andExpect(jsonPath("$.originalFilename").value("vacation.png"));
+
+        verify(memoryService).uploadPhoto(eq(10L), any(), eq(1L));
+    }
+
+    @Test
+    @DisplayName("POST /api/memories/{id}/photo returns 401 Unauthorized when unauthenticated")
+    void uploadPhoto_whenUnauthenticated_shouldReturn401() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "vacation.png", "image/png", new byte[] {1, 2, 3});
+
+        mockMvc.perform(multipart("/api/memories/10/photo")
+                        .file(file)
+                        .with(csrf()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("Unauthorized"));
+    }
+
+    @Test
+    @DisplayName("POST /api/memories/{id}/photo returns 403 Forbidden when CSRF token is missing")
+    void uploadPhoto_whenMissingCsrf_shouldReturn403() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "vacation.png", "image/png", new byte[] {1, 2, 3});
+
+        mockMvc.perform(multipart("/api/memories/10/photo")
+                        .file(file)
+                        .with(user(user1)))
+                .andExpect(status().isForbidden())
+                .andExpect(jsonPath("$.error").value("Forbidden"));
+    }
+
+    @Test
+    @DisplayName("POST /api/memories/{id}/photo returns 404 Not Found when memory is foreign or missing")
+    void uploadPhoto_whenForeignOrMissing_shouldReturn404() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "vacation.png", "image/png", new byte[] {1, 2, 3});
+        when(memoryService.uploadPhoto(eq(999L), any(), eq(2L)))
+                .thenThrow(new ResourceNotFoundException("Memory not found with id: 999"));
+
+        mockMvc.perform(multipart("/api/memories/999/photo")
+                        .file(file)
+                        .with(user(user2))
+                        .with(csrf()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Not Found"));
+    }
+
+    @Test
+    @DisplayName("POST /api/memories/{id}/photo returns 400 Bad Request when photo is invalid or unsupported")
+    void uploadPhoto_whenInvalidPhoto_shouldReturn400() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "bad.gif", "image/gif", new byte[] {1, 2, 3});
+        when(memoryService.uploadPhoto(eq(10L), any(), eq(1L)))
+                .thenThrow(new InvalidPhotoException("Only JPEG and PNG formats are supported"));
+
+        mockMvc.perform(multipart("/api/memories/10/photo")
+                        .file(file)
+                        .with(user(user1))
+                        .with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value("Only JPEG and PNG formats are supported"));
+    }
+
+    @Test
+    @DisplayName("POST /api/memories/{id}/photo returns 400 Bad Request when MaxUploadSizeExceededException occurs")
+    void uploadPhoto_whenMaxUploadSizeExceeded_shouldReturn400() throws Exception {
+        MockMultipartFile file = new MockMultipartFile("file", "oversized.png", "image/png", new byte[] {1, 2, 3});
+        when(memoryService.uploadPhoto(eq(10L), any(), eq(1L)))
+                .thenThrow(new MaxUploadSizeExceededException(5 * 1024 * 1024));
+
+        mockMvc.perform(multipart("/api/memories/10/photo")
+                        .file(file)
+                        .with(user(user1))
+                        .with(csrf()))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.status").value(400))
+                .andExpect(jsonPath("$.error").value("Bad Request"))
+                .andExpect(jsonPath("$.message").value("Photo file size exceeds maximum limit of 5 MB"))
+                .andExpect(jsonPath("$.timestamp").exists());
+    }
+
+    @Test
+    @DisplayName("GET /api/memories/{id}/photo returns 200 OK with correct Resource, MIME, and security headers")
+    void getPhoto_whenOwner_shouldReturn200WithHeaders() throws Exception {
+        byte[] imageBytes = new byte[] {1, 2, 3, 4};
+        ByteArrayResource resource = new ByteArrayResource(imageBytes);
+        PhotoDownload download = new PhotoDownload(resource, "image/png");
+
+        when(memoryService.getPhoto(10L, 1L)).thenReturn(download);
+
+        mockMvc.perform(get("/api/memories/10/photo")
+                        .with(user(user1)))
+                .andExpect(status().isOk())
+                .andExpect(header().string(HttpHeaders.CONTENT_TYPE, "image/png"))
+                .andExpect(header().string(HttpHeaders.CACHE_CONTROL, "private, max-age=3600, must-revalidate"))
+                .andExpect(header().string("X-Content-Type-Options", "nosniff"))
+                .andExpect(header().string(HttpHeaders.CONTENT_DISPOSITION, "inline"))
+                .andExpect(content().bytes(imageBytes));
+
+        verify(memoryService).getPhoto(10L, 1L);
+    }
+
+    @Test
+    @DisplayName("GET /api/memories/{id}/photo returns 401 Unauthorized when unauthenticated")
+    void getPhoto_whenUnauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(get("/api/memories/10/photo"))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("Unauthorized"));
+    }
+
+    @Test
+    @DisplayName("GET /api/memories/{id}/photo returns 404 Not Found when memory is foreign or missing")
+    void getPhoto_whenForeignOrMissing_shouldReturn404() throws Exception {
+        when(memoryService.getPhoto(999L, 2L))
+                .thenThrow(new ResourceNotFoundException("Memory not found with id: 999"));
+
+        mockMvc.perform(get("/api/memories/999/photo")
+                        .with(user(user2)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Not Found"));
+    }
+
+    @Test
+    @DisplayName("GET /api/memories/{id}/photo returns 404 Not Found when memory has no photo or file is missing")
+    void getPhoto_whenNoPhotoOrFileMissing_shouldReturn404() throws Exception {
+        when(memoryService.getPhoto(10L, 1L))
+                .thenThrow(new ResourceNotFoundException("No photo associated with memory id: 10"));
+
+        mockMvc.perform(get("/api/memories/10/photo")
+                        .with(user(user1)))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Not Found"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/memories/{id}/photo returns 200 OK with updated MemoryResponse when owned")
+    void deletePhoto_whenOwner_shouldReturn200WithUpdatedResponse() throws Exception {
+        MemoryResponse updated = new MemoryResponse(
+                10L,
+                1L,
+                "Northern Lights in Tromso",
+                "Travel",
+                LocalDate.of(2026, 1, 15),
+                "Spectacular lights!",
+                null,
+                null,
+                LocalDateTime.now(),
+                LocalDateTime.now()
+        );
+        when(memoryService.deletePhoto(10L, 1L)).thenReturn(updated);
+
+        mockMvc.perform(delete("/api/memories/10/photo")
+                        .with(user(user1))
+                        .with(csrf()))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.id").value(10))
+                .andExpect(jsonPath("$.photoPath").doesNotExist())
+                .andExpect(jsonPath("$.originalFilename").doesNotExist());
+
+        verify(memoryService).deletePhoto(10L, 1L);
+    }
+
+    @Test
+    @DisplayName("DELETE /api/memories/{id}/photo returns 401 Unauthorized when unauthenticated")
+    void deletePhoto_whenUnauthenticated_shouldReturn401() throws Exception {
+        mockMvc.perform(delete("/api/memories/10/photo")
+                        .with(csrf()))
+                .andExpect(status().isUnauthorized())
+                .andExpect(jsonPath("$.error").value("Unauthorized"));
+    }
+
+    @Test
+    @DisplayName("DELETE /api/memories/{id}/photo returns 403 Forbidden when CSRF token is missing")
+    void deletePhoto_whenMissingCsrf_shouldReturn403() throws Exception {
+        mockMvc.perform(delete("/api/memories/10/photo")
+                        .with(user(user1)))
+                .andExpect(status().isForbidden());
+    }
+
+    @Test
+    @DisplayName("DELETE /api/memories/{id}/photo returns 404 Not Found when memory is foreign or missing")
+    void deletePhoto_whenForeignOrMissing_shouldReturn404() throws Exception {
+        when(memoryService.deletePhoto(999L, 2L))
+                .thenThrow(new ResourceNotFoundException("Memory not found with id: 999"));
+
+        mockMvc.perform(delete("/api/memories/999/photo")
+                        .with(user(user2))
+                        .with(csrf()))
+                .andExpect(status().isNotFound())
+                .andExpect(jsonPath("$.error").value("Not Found"));
     }
 }

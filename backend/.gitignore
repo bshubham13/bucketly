@@ -17,6 +17,9 @@ target/
 logs/
 *.log
 
+# Uploaded media
+uploads/
+
 ### STS ###
 .apt_generated
 .classpath

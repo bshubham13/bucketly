@@ -4,6 +4,7 @@ import { dreamApi, type DreamRequest, type DreamResponse } from './services/drea
 import { memoryApi, type MemoryCreateRequest, type MemoryUpdateRequest, type MemoryResponse } from './services/memoryService'
 import { authService, type AuthResponse } from './services/authService'
 import { ApiError } from './services/apiClient'
+import { MemoryImage } from './components/MemoryImage'
 
 // Simple, beginner-friendly TypeScript type representing one bucket list goal
 export interface DreamItem {
@@ -194,6 +195,10 @@ function App() {
   const [selectedDreamId, setSelectedDreamId] = useState<number | ''>('')
   const [completedDate, setCompletedDate] = useState('')
   const [story, setStory] = useState('')
+  const [selectedPhotoFile, setSelectedPhotoFile] = useState<File | null>(null)
+  const [photoPreviewUrl, setPhotoPreviewUrl] = useState<string | null>(null)
+  const [photoInputError, setPhotoInputError] = useState<string | null>(null)
+  const [existingPhotoPath, setExistingPhotoPath] = useState<string | null>(null)
 
   // Load dreams from backend API
   const loadDreams = async () => {
@@ -507,12 +512,61 @@ function App() {
     }
   }
 
+  // Clean up memory photo preview URL on unmount
+  useEffect(() => {
+    return () => {
+      if (photoPreviewUrl) {
+        URL.revokeObjectURL(photoPreviewUrl)
+      }
+    }
+  }, [photoPreviewUrl])
+
   // --------------------------------------------------------------------------
   // Memory Modal Handlers
   // --------------------------------------------------------------------------
+  const clearPhotoSelection = () => {
+    if (photoPreviewUrl) {
+      URL.revokeObjectURL(photoPreviewUrl)
+    }
+    setSelectedPhotoFile(null)
+    setPhotoPreviewUrl(null)
+    setPhotoInputError(null)
+  }
+
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    setPhotoInputError(null)
+
+    if (!file) return
+
+    // Validate type (JPEG or PNG)
+    const validTypes = ['image/jpeg', 'image/png']
+    if (!validTypes.includes(file.type)) {
+      setPhotoInputError('Only JPG and PNG images are supported.')
+      return
+    }
+
+    // Validate file size: 5 MB limit (5 * 1024 * 1024 bytes)
+    const maxSizeBytes = 5 * 1024 * 1024
+    if (file.size > maxSizeBytes) {
+      setPhotoInputError('Photo file size exceeds maximum limit of 5 MB.')
+      return
+    }
+
+    if (photoPreviewUrl) {
+      URL.revokeObjectURL(photoPreviewUrl)
+    }
+
+    const preview = URL.createObjectURL(file)
+    setSelectedPhotoFile(file)
+    setPhotoPreviewUrl(preview)
+  }
+
   const handleOpenAddMemoryModal = (preselectedDreamId?: number) => {
     setMemoryModalMode('add')
     setEditingMemoryId(null)
+    clearPhotoSelection()
+    setExistingPhotoPath(null)
 
     if (preselectedDreamId && eligibleDreams.some((d) => d.id === preselectedDreamId)) {
       setSelectedDreamId(preselectedDreamId)
@@ -531,6 +585,8 @@ function App() {
   const handleOpenEditMemoryModal = (memory: MemoryResponse) => {
     setMemoryModalMode('edit')
     setEditingMemoryId(memory.id)
+    clearPhotoSelection()
+    setExistingPhotoPath(memory.photoPath)
     setSelectedDreamId(memory.dreamId)
     setCompletedDate(memory.completedDate)
     setStory(memory.story || '')
@@ -544,6 +600,35 @@ function App() {
     setSelectedDreamId('')
     setStory('')
     setMemoryFormError(null)
+    clearPhotoSelection()
+    setExistingPhotoPath(null)
+  }
+
+  const handleRemoveExistingPhoto = async () => {
+    if (!editingMemoryId) return
+
+    setIsSubmittingMemory(true)
+    setMemoryFormError(null)
+
+    try {
+      const updated = await memoryApi.deletePhoto(editingMemoryId)
+      setMemories((prev) =>
+        prev.map((m) => (m.id === editingMemoryId ? updated : m))
+      )
+      setExistingPhotoPath(null)
+      clearPhotoSelection()
+    } catch (err: unknown) {
+      if (err instanceof ApiError && err.status === 401) {
+        setCurrentUser(null)
+        setMemories([])
+        setAuthGlobalMessage('Your session has expired. Please sign in again.')
+        return
+      }
+      const message = err instanceof Error ? err.message : 'Failed to remove photo.'
+      setMemoryFormError(message)
+    } finally {
+      setIsSubmittingMemory(false)
+    }
   }
 
   const handleOpenDeleteMemoryModal = (memory: MemoryResponse) => {
@@ -591,6 +676,11 @@ function App() {
       return
     }
 
+    if (photoInputError) {
+      setMemoryFormError(photoInputError)
+      return
+    }
+
     setIsSubmittingMemory(true)
     setMemoryFormError(null)
 
@@ -608,22 +698,62 @@ function App() {
           story: story.trim() || undefined
         }
 
+        // 1. Create the memory record first
         const created = await memoryApi.create(payload)
+
+        // 2. Add to local state and synchronize dreams immediately so milestone is safe
         setMemories((prev) => [created, ...prev])
-        // Reload dreams to synchronize the dream status change to Completed in the dashboard
         await loadDreams()
-        handleCloseMemoryModal()
+
+        // 3. Upload photo if selected
+        if (selectedPhotoFile) {
+          try {
+            const memoryWithPhoto = await memoryApi.uploadPhoto(created.id, selectedPhotoFile)
+            setMemories((prev) =>
+              prev.map((m) => (m.id === created.id ? memoryWithPhoto : m))
+            )
+            handleCloseMemoryModal()
+          } catch (photoErr: unknown) {
+            // Memory is successfully created and preserved!
+            // Switch modal into edit mode for the created memory so the user can retry upload
+            setMemoryModalMode('edit')
+            setEditingMemoryId(created.id)
+            setExistingPhotoPath(created.photoPath)
+            const photoMessage = photoErr instanceof Error ? photoErr.message : 'Photo upload failed.'
+            setMemoryFormError(
+              `Memory was recorded successfully, but photo upload failed: ${photoMessage} You can choose another photo and retry.`
+            )
+          }
+        } else {
+          handleCloseMemoryModal()
+        }
       } else if (memoryModalMode === 'edit' && editingMemoryId !== null) {
         const payload: MemoryUpdateRequest = {
           completedDate,
           story: story.trim() || undefined
         }
 
+        // 1. Update text fields first
         const updated = await memoryApi.update(editingMemoryId, payload)
         setMemories((prev) =>
           prev.map((m) => (m.id === editingMemoryId ? updated : m))
         )
-        handleCloseMemoryModal()
+
+        // 2. Upload photo if a new file was selected
+        if (selectedPhotoFile) {
+          try {
+            const memoryWithPhoto = await memoryApi.uploadPhoto(editingMemoryId, selectedPhotoFile)
+            setMemories((prev) =>
+              prev.map((m) => (m.id === editingMemoryId ? memoryWithPhoto : m))
+            )
+            handleCloseMemoryModal()
+          } catch (photoErr: unknown) {
+            const photoMessage = photoErr instanceof Error ? photoErr.message : 'Photo upload failed.'
+            setMemoryFormError(`Memory updated, but photo upload failed: ${photoMessage}`)
+          }
+        } else {
+          handleCloseMemoryModal()
+        }
       }
     } catch (err: unknown) {
       if (err instanceof ApiError && err.status === 401) {
@@ -1282,6 +1412,17 @@ function App() {
                     {memories.map((mem) => (
                       <article key={mem.id} className="memory-card">
                         <div>
+                          {mem.photoPath && (
+                            <div className="memory-card-photo-wrapper">
+                              <MemoryImage
+                                key={mem.id}
+                                memoryId={mem.id}
+                                alt={`Milestone photo for ${mem.dreamTitle}`}
+                                className="memory-card-photo"
+                              />
+                            </div>
+                          )}
+
                           <div className="memory-card-header">
                             <span className="category-tag">{mem.dreamCategory}</span>
                             <span className="memory-date-badge">
@@ -1763,6 +1904,101 @@ function App() {
                   value={story}
                   onChange={(e) => setStory(e.target.value)}
                 />
+              </div>
+
+              {/* Field 4: Photo Upload (Optional, JPG/PNG up to 5 MB) */}
+              <div className="form-group">
+                <label htmlFor="memory-photo-input" className="form-label">
+                  Commemorative Photo
+                  <span className="optional-badge">(Optional, max 5 MB)</span>
+                </label>
+
+                {photoPreviewUrl ? (
+                  <div className="memory-modal-photo-preview-box">
+                    <img
+                      src={photoPreviewUrl}
+                      alt="Selected memory preview"
+                      className="memory-modal-preview-img"
+                    />
+                    <div className="memory-modal-preview-info">
+                      <p className="memory-modal-preview-filename">{selectedPhotoFile?.name}</p>
+                      <p className="list-meta-text">
+                        {selectedPhotoFile ? `${(selectedPhotoFile.size / (1024 * 1024)).toFixed(2)} MB` : ''}
+                      </p>
+                      <div className="memory-modal-preview-actions">
+                        <label
+                          htmlFor="memory-photo-input"
+                          className="btn-secondary memory-modal-replace-btn"
+                          tabIndex={0}
+                        >
+                          Replace Photo
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-secondary memory-modal-remove-btn"
+                          onClick={clearPhotoSelection}
+                          disabled={isSubmittingMemory}
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : existingPhotoPath && memoryModalMode === 'edit' && editingMemoryId !== null ? (
+                  <div className="memory-modal-existing-photo-box">
+                    <MemoryImage
+                      memoryId={editingMemoryId}
+                      alt="Current memory photo"
+                      className="memory-modal-existing-img"
+                    />
+                    <div className="memory-modal-preview-info">
+                      <p className="memory-modal-preview-filename">Current photo attached</p>
+                      <p className="list-meta-text">Choose a new file below to replace it, or remove it.</p>
+                      <div className="memory-modal-preview-actions">
+                        <label
+                          htmlFor="memory-photo-input"
+                          className="btn-secondary memory-modal-replace-btn"
+                          tabIndex={0}
+                        >
+                          Choose New Photo
+                        </label>
+                        <button
+                          type="button"
+                          className="btn-secondary memory-modal-remove-btn"
+                          onClick={handleRemoveExistingPhoto}
+                          disabled={isSubmittingMemory}
+                        >
+                          Remove Photo
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="memory-photo-upload-dropzone">
+                    <label htmlFor="memory-photo-input" className="memory-photo-dropzone-label">
+                      <div className="memory-photo-upload-icon" aria-hidden="true">📷</div>
+                      <span className="memory-photo-upload-text">
+                        Choose a photo (JPG or PNG, max 5 MB)
+                      </span>
+                      <span className="btn-secondary memory-photo-choose-btn">Browse File</span>
+                    </label>
+                  </div>
+                )}
+
+                <input
+                  id="memory-photo-input"
+                  type="file"
+                  accept="image/jpeg,image/png"
+                  className="memory-file-input-hidden"
+                  onChange={handlePhotoChange}
+                  disabled={isSubmittingMemory}
+                />
+
+                {photoInputError && (
+                  <p className="form-error-inline" style={{ marginTop: '0.4rem', color: '#f87171', fontSize: '0.85rem' }}>
+                    {photoInputError}
+                  </p>
+                )}
               </div>
 
               {/* Form Action Buttons */}
